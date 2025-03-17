@@ -1,0 +1,696 @@
+################ Example 1 #################
+Here is the bug report:
+Note that source lines are provided on a best-effort basis and may not always be accurate. Typically, the source line that made a usermode access may be the line preceding or following the line that was quoted in the report. The module offsets, however, are always accurate, and can be used as a last resort for investigation.
+
+=================================================================================
+Defect #0
+=================================================================================
+
+Normal usermode access at BuildQueryDirectoryIrp0x403 -- minkerneltos\io\iomgr\dir.c:400 (ntkrnlmp.exe+0xb5d683)
+396:                // auxiliary buffer.397:                //398:399:                nameBuffer = (PUNICODE_STRING) auxiliaryBuffer;400:                nameBuffer->Length = fileName.Length;     <---- HERE401:                nameBuffer->MaximumLength = fileName.Length;402:                nameBuffer->Buffer = (PWSTR) (auxiliaryBuffer + sizeof( UNICODE_STRING ) );403:            }404:        }
+
+
+Here are the changes to the code:
+//before 
+                RtlCopyMemory( auxiliaryBuffer + sizeof( UNICODE_STRING ),
+                               fileName.Buffer,
+                               fileName.Length );
+//after
+                CopyFromMode( auxiliaryBuffer + sizeof( UNICODE_STRING ),
+                              fileName.Buffer,
+                              fileName.Length,
+                              requestorMode );
+
+
+//before 
+
+....     } except(EXCEPTION_EXECUTE_HANDLER) {
+
+//after
+
+    } __except(UmaExceptionFilter(requestorMode)) {
+
+
+
+################ Example 2 #################
+Here is the bug report:
+=================================================================================
+Defect #0
+=================================================================================
+
+Normal usermode access at DbgkRegisterErrorPort+0x21B -- minkernel\ntos\dbgk\dbgkport.c:1368 (ntkrnlmp.exe+0x91e37b)
+1364:
+1365:    Status = STATUS_SUCCESS;
+1366:
+1367:    try {
+1368:        RtlCopyMemory (CapturedString.Buffer, PortName, NameLength);     <---- HERE
+1369:    } except (EXCEPTION_EXECUTE_HANDLER) {
+1370:        Status = GetExceptionCode ();
+1371:    }
+1372:
+
+Found 2 associated callstacks:
+>> DbgkRegisterErrorPort+0x21B -- minkernel\ntos\dbgk\dbgkport.c:1368 (ntkrnlmp.exe+0x91e37b)
+>> NtSetSystemInformation+0x14B8 -- minkernel\ntos\ex\sysinfo.c:13150 (ntkrnlmp.exe+0xd35cd8)
+>> KiSystemCall64+0x525 -- minkernel\ntos\ke\amd64\trap.asm:3699 (ntkrnlmp.exe+0x8ecc25)
+>> DbgkRegisterErrorPort+0x21B -- minkernel\ntos\dbgk\dbgkport.c:1368 (ntkrnlmp.exe+0x91e37b)
+>> NtSetSystemInformation+0x14B8 -- minkernel\ntos\ex\sysinfo.c:13150 (ntkrnlmp.exe+0xd35cd8)
+>> KiSystemCall64+0x528 -- minkernel\ntos\ke\amd64\trap.asm:3701 (ntkrnlmp.exe+0x8ecc28)
+
+
+Here are the changes to the code:
+//before 
+
+  CapturedString.Length = CapturedString.MaximumLength = (USHORT) NameLength;
+
+    Status = STATUS_SUCCESS;
+
+    try {
+        RtlCopyMemory (CapturedString.Buffer, PortName, NameLength);
+    } except (EXCEPTION_EXECUTE_HANDLER) {
+        Status = GetExceptionCode ();
+    }
+
+
+//after
+  
+    CapturedString.Length = CapturedString.MaximumLength = (USHORT) NameLength;
+
+    Status = STATUS_SUCCESS;
+
+    __try {
+        CopyFromUser (CapturedString.Buffer, PortName, NameLength);
+
+    } __except (UmaExceptionFilter(UserMode)) {
+        Status = GetExceptionCode ();
+    }
+
+
+################ Example 3 #################
+Here is the bug report:
+Note that source lines are provided on a best-effort basis and may not always be accurate. Typically, the source line that made a usermode access may be the line preceding or following the line that was quoted in the report. The module offsets, however, are always accurate, and can be used as a last resort for investigation.
+
+=================================================================================
+Defect #0
+=================================================================================
+
+4 usermode accesses in KeBuildLogicalProcessorSystemInformation -- minkernel\ntos\ke\topology.c:1102
+1098:        if (Prcb->Number == ProcNumber) {
+1099:            CurrentLength += sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION);
+1100:            if (CurrentLength <= SystemInformationLength) {
+1101:                Output->ProcessorMask = GroupAffinity.Mask;
+1102:                Output->Relationship = RelationProcessorPackage;     <---- HERE (ntkrnlmp.exe+0xc30f7d)
+1103:                Output->Reserved[0] = Output->Reserved[1] = 0;     <---- HERE (ntkrnlmp.exe+0xc30f89, ntkrnlmp.exe+0xc30f9a, ntkrnlmp.exe+0xc30fa8)
+1104:                Output->ProcessorCore.Flags = 0;
+1105:                Output += 1;
+1106:
+1107:            } else {
+
+
+=================================================================================
+Defect #1
+=================================================================================
+
+5 usermode accesses in KeBuildLogicalProcessorSystemInformation -- minkernel\ntos\ke\topology.c:1135
+1131:
+1132:            CurrentLength += sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION);
+1133:            if (CurrentLength <= SystemInformationLength) {
+1134:                Output->ProcessorMask = GroupAffinity.Mask;
+1135:                Output->Relationship = RelationProcessorCore;     <---- HERE (ntkrnlmp.exe+0xc3101e, ntkrnlmp.exe+0xc3102a)
+1136:                Output->Reserved[0] = Output->Reserved[1] = 0;     <---- HERE (ntkrnlmp.exe+0xc31039)
+1137:                Output->ProcessorCore.Flags = Flags;     <---- HERE (ntkrnlmp.exe+0xc31049)
+1138:                Output += 1;     <---- HERE (ntkrnlmp.exe+0xc31054)
+1139:
+1140:            } else {
+1141:                Status = STATUS_INFO_LENGTH_MISMATCH;
+1142:            }
+
+
+=================================================================================
+Defect #2
+=================================================================================
+
+5 usermode accesses in KeBuildLogicalProcessorSystemInformation -- minkernel\ntos\ke\topology.c:1173
+1169:
+1170:            CurrentLength += sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION);
+1171:            if (CurrentLength <= SystemInformationLength) {
+1172:                Output->ProcessorMask = GroupAffinity.Mask;
+1173:                Output->Relationship = RelationCache;     <---- HERE (ntkrnlmp.exe+0xc31114)
+1174:                Output->Reserved[0] = Output->Reserved[1] = 0;     <---- HERE (ntkrnlmp.exe+0xc31125, ntkrnlmp.exe+0xc31135, ntkrnlmp.exe+0xc31145)
+1175:                Output->Cache = Prcb->Cache[Level];
+1176:                Output += 1;     <---- HERE (ntkrnlmp.exe+0xc3116d)
+1177:
+1178:            } else {
+1179:                Status = STATUS_INFO_LENGTH_MISMATCH;
+1180:            }
+
+
+=================================================================================
+Defect #3
+=================================================================================
+
+5 usermode accesses in KeBuildLogicalProcessorSystemInformation -- minkernel\ntos\ke\topology.c:1208
+1204:
+1205:        CurrentLength += sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION);
+1206:        if (CurrentLength <= SystemInformationLength) {
+1207:            Output->ProcessorMask = GroupAffinity.Mask;
+1208:            Output->Relationship = RelationNumaNode;     <---- HERE (ntkrnlmp.exe+0xc3122a)
+1209:            Output->Reserved[0] = Output->Reserved[1] = 0;     <---- HERE (ntkrnlmp.exe+0xc31237, ntkrnlmp.exe+0xc31248, ntkrnlmp.exe+0xc31255)
+1210:            Output->NumaNode.NodeNumber = Index;     <---- HERE (ntkrnlmp.exe+0xc31261)
+1211:            Output += 1;
+1212:
+1213:        } else {
+1214:            Status = STATUS_INFO_LENGTH_MISMATCH;
+
+
+=================================================================================
+Defect #4
+=================================================================================
+
+Normal usermode access at KeQueryNodeActiveAffinity0x36 -- minkernel\ntos\ke\topology.c:538 (ntkrnlmp.exe+0x599da6)
+534:    if (ARGUMENT_PRESENT(Affinity)) {
+535:        RtlZeroMemory(Affinity, sizeof(GROUP_AFFINITY));
+536:    }
+537:
+538:    if (ARGUMENT_PRESENT(Count)) {     <---- HERE
+539:        *Count = 0;
+540:    }
+541:
+542:    if (NodeNumber >= KeNumberNodes) {
+
+
+=================================================================================
+Defect #5
+=================================================================================
+
+3 usermode accesses in KeGetCurrentProcessorNumberEx -- minkernel\ntos\ke\topology.c:897
+893:
+894:    Prcb = KeGetCurrentPrcb();
+895:    if (ARGUMENT_PRESENT(ProcNumber)) {
+896:        ProcNumber->Group = Prcb->Group;
+897:        ProcNumber->Number = Prcb->GroupIndex;     <---- HERE (ntkrnlmp.exe+0x59a3d1, ntkrnlmp.exe+0x59a3ea)
+898:        ProcNumber->Reserved = 0;     <---- HERE (ntkrnlmp.exe+0x59a3fd)
+899:    }
+900:
+901:    return Prcb->Number;
+902:}
+
+
+=================================================================================
+Defect #6
+=================================================================================
+
+3 usermode accesses in KiQuerySubNodeActiveAffinity -- minkernel\ntos\ke\topology.c:5262
+5258:
+5259:{
+5260:    if (Affinity != NULL) {
+5261:        RtlZeroMemory(Affinity, sizeof(*Affinity));
+5262:        Affinity->Mask = SubNode->Affinity.Mask;     <---- HERE (ntkrnlmp.exe+0x59cb94, ntkrnlmp.exe+0x59cba4)
+5263:        Affinity->Group = SubNode->Affinity.Group;     <---- HERE (ntkrnlmp.exe+0x59cbbf)
+5264:    }
+5265:
+5266:    if (Count != NULL) {
+5267:        *Count = (USHORT)RtlNumberOfSetBitsUlongPtr(SubNode->Affinity.Mask);
+
+
+
+/// BEFORE 
+__drv_minIRQL(PASSIVE_LEVEL)
+__drv_maxIRQL(APC_LEVEL)
+__drv_sameIRQL
+NTSTATUS
+KeBuildLogicalProcessorSystemInformation (
+    __in USHORT Group,
+    __out PVOID SystemInformation,
+    __in ULONG SystemInformationLength,
+    __out PULONG ReturnedLength
+    )
+
+/*++
+
+Routine Description:
+
+    This function returns information about the physical processors and nodes
+    of a given group in the host system.  The information class returned by this
+    routine has been replaced by the one returned by
+    KeQueryLogicalProcessorRelationship below.
+
+    N.B. It assumed that specified buffer is either accessible or access
+         is protected by an outer try/except block.
+
+Arguments:
+
+    Group - Specifies the number of the group of which the physical
+        processors and nodes are returned.
+
+    SystemInformation - Supplies a pointer to a buffer which receives the
+        specified information.
+
+    SystemInformationLength - Supplies the length of the output buffer in
+        bytes.
+
+    ReturnLength - Supples a pointer to a variable which receives the number
+        of bytes necessary to return all of the information records available.
+
+Return Value:
+
+    NTSTATUS
+
+--*/
+
+{
+
+    ULONG CurrentLength;
+    UCHAR Flags;
+    ULONG Index;
+    ULONG Level;
+    GROUP_AFFINITY GroupAffinity;
+    PKNODE Node;
+    PKSCHEDULER_SUBNODE SubNode;
+    PSYSTEM_LOGICAL_PROCESSOR_INFORMATION Output;
+    PKPRCB Prcb;
+    ULONG ProcNumber;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    PAGED_CODE();
+
+    //
+    // Add a record for each physical processor.
+    //
+
+    CurrentLength = 0;
+    Output = SystemInformation;
+    RtlZeroMemory(&GroupAffinity, sizeof(GROUP_AFFINITY));
+    for (Index = 0; Index < KeNumberProcessors; Index += 1) {
+        Flags = 0;
+        Prcb = KiGetPrcb(Index);
+        if (Prcb->Group != Group) {
+            continue;
+        }
+
+        //
+        // RelationProcessorPackage:
+        //
+        // Add package information for the first logical processor
+        // in the package.
+        //
+
+        GroupAffinity.Group = Prcb->Group;
+        GroupAffinity.Mask = Prcb->PackageProcessorSet.Bitmap[Prcb->Group];
+        ProcNumber = KeFindFirstSetLeftGroupAffinity(&GroupAffinity);
+        if (Prcb->Number == ProcNumber) {
+            CurrentLength += sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION);
+            if (CurrentLength <= SystemInformationLength) {
+                Output->ProcessorMask = GroupAffinity.Mask;
+                Output->Relationship = RelationProcessorPackage;
+                Output->Reserved[0] = Output->Reserved[1] = 0;
+                Output->ProcessorCore.Flags = 0;
+                Output += 1;
+
+            } else {
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+            }
+        }
+
+        //
+        // RelationProcessorCore:
+        //
+        // Add core information for the first logical processor in the
+        // core.
+        //
+
+        GroupAffinity.Mask = Prcb->CoreProcessorSet;
+        ProcNumber = KeFindFirstSetLeftGroupAffinity(&GroupAffinity);
+        if (Prcb->Number == ProcNumber) {
+
+            //
+            // If this core has more than one logical processor, then
+            // mark it as an SMT relationship.
+            //
+
+            if (Prcb->GroupSetMember != GroupAffinity.Mask) {
+                Flags = LTP_PC_SMT;
+            }
+
+            CurrentLength += sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION);
+            if (CurrentLength <= SystemInformationLength) {
+                Output->ProcessorMask = GroupAffinity.Mask;
+                Output->Relationship = RelationProcessorCore;
+                Output->Reserved[0] = Output->Reserved[1] = 0;
+                Output->ProcessorCore.Flags = Flags;
+                Output += 1;
+
+            } else {
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+            }
+        }
+
+        //
+        // RelationCache:
+        //
+        // Add a record for each cache level associated with the physical
+        // processor.
+        //
+
+        for (Level = 0; Level < Prcb->CacheCount; Level += 1) {
+
+            GroupAffinity.Group = Group;
+            GroupAffinity.Mask = KeQueryGroupAffinityEx(
+                                    &Prcb->CacheProcessorSet[Level],
+                                    Group);
+
+            NT_ASSERT(GroupAffinity.Mask != 0);
+
+            //
+            // Don't add shared caches more than once.
+            //
+
+            ProcNumber = KeFindFirstSetLeftGroupAffinity(&GroupAffinity);
+            if (Prcb->Number != ProcNumber) {
+                continue;
+            }
+
+            CurrentLength += sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION);
+            if (CurrentLength <= SystemInformationLength) {
+                Output->ProcessorMask = GroupAffinity.Mask;
+                Output->Relationship = RelationCache;
+                Output->Reserved[0] = Output->Reserved[1] = 0;
+                Output->Cache = Prcb->Cache[Level];
+                Output += 1;
+
+            } else {
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+            }
+        }
+    }
+
+    //
+    // Add a record for each node in the host system.
+    //
+
+    for (Index = 0; Index < KeNumberNodes; Index += 1) {
+
+        Node = KeNodeBlock[Index];
+        SubNode = KiGetSubNodeForGroup(Node, Group);
+
+        if (SubNode == NULL) {
+            continue;
+        }
+
+        NT_ASSERT(SubNode->Affinity.Group == Group);
+
+        if (SubNode->Affinity.Mask == 0) {
+            continue;
+        }
+
+        GroupAffinity.Mask = SubNode->Affinity.Mask;
+
+        CurrentLength += sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION);
+        if (CurrentLength <= SystemInformationLength) {
+            Output->ProcessorMask = GroupAffinity.Mask;
+            Output->Relationship = RelationNumaNode;
+            Output->Reserved[0] = Output->Reserved[1] = 0;
+            Output->NumaNode.NodeNumber = Index;
+            Output += 1;
+
+        } else {
+            Status = STATUS_INFO_LENGTH_MISMATCH;
+        }
+    }
+
+    //
+    // Return the length of the buffer required to hold the entire set of
+    // information.
+    //
+
+    *ReturnedLength = CurrentLength;
+    return Status;
+}
+
+
+//// AFTER
+
+__drv_minIRQL(PASSIVE_LEVEL)
+__drv_maxIRQL(APC_LEVEL)
+__drv_sameIRQL
+NTSTATUS
+KeBuildLogicalProcessorSystemInformation (
+    _In_ USHORT Group,
+    _Out_ PVOID SystemInformation,
+    _In_ ULONG SystemInformationLength,
+    _In_ KPROCESSOR_MODE PreviousMode,
+    _Out_ PULONG ReturnedLength
+    )
+
+/*++
+
+Routine Description:
+
+    This function returns information about the physical processors and nodes
+    of a given group in the host system.  The information class returned by this
+    routine has been replaced by the one returned by
+    KeQueryLogicalProcessorRelationship below.
+
+    N.B. It assumed that specified buffer is either accessible or access
+         is protected by an outer try/except block.
+
+Arguments:
+
+    Group - Specifies the number of the group of which the physical
+        processors and nodes are returned.
+
+    SystemInformation - Supplies a pointer to a buffer which receives the
+        specified information.
+
+    SystemInformationLength - Supplies the length of the output buffer in
+        bytes.
+
+    PreviousMode - Supplies the mode of the SystemInformation buffer.
+
+    ReturnLength - Supples a pointer to a variable which receives the number
+        of bytes necessary to return all of the information records available.
+
+Return Value:
+
+    NTSTATUS
+
+--*/
+
+{
+
+    ULONG CurrentLength;
+    UCHAR Flags;
+    ULONG Index;
+    ULONG Level;
+    GROUP_AFFINITY GroupAffinity;
+    PKNODE Node;
+    PKSCHEDULER_SUBNODE SubNode;
+    SYSTEM_LOGICAL_PROCESSOR_INFORMATION LocalOutput;
+    PSYSTEM_LOGICAL_PROCESSOR_INFORMATION Output;
+    PKPRCB Prcb;
+    ULONG ProcNumber;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    PAGED_CODE();
+
+    //
+    // Add a record for each physical processor.
+    //
+
+    CurrentLength = 0;
+    Output = SystemInformation;
+    RtlZeroMemory(&GroupAffinity, sizeof(GROUP_AFFINITY));
+    for (Index = 0; Index < KeNumberProcessors; Index += 1) {
+        Flags = 0;
+        Prcb = KiGetPrcb(Index);
+        if (Prcb->Group != Group) {
+            continue;
+        }
+
+        //
+        // RelationProcessorPackage:
+        //
+        // Add package information for the first logical processor
+        // in the package.
+        //
+
+        GroupAffinity.Group = Prcb->Group;
+        GroupAffinity.Mask = Prcb->PackageProcessorSet.Bitmap[Prcb->Group];
+        ProcNumber = KeFindFirstSetLeftGroupAffinity(&GroupAffinity);
+
+        if (Prcb->Number == ProcNumber) {
+            CurrentLength += sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION);
+
+            if (CurrentLength <= SystemInformationLength) {
+
+                RtlZeroMemory(&LocalOutput, sizeof(LocalOutput));
+
+                LocalOutput.ProcessorMask = GroupAffinity.Mask;
+                LocalOutput.Relationship = RelationProcessorPackage;
+                LocalOutput.ProcessorCore.Flags = 0;
+
+                __try {
+                    WriteStructToMode(Output, &LocalOutput, PreviousMode);
+                } __except(UmaExceptionFilter(PreviousMode)) {
+                    Status = GetExceptionCode();
+                    goto exit;
+                }
+
+                Output += 1;
+
+            } else {
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+            }
+        }
+
+        //
+        // RelationProcessorCore:
+        //
+        // Add core information for the first logical processor in the
+        // core.
+        //
+
+        GroupAffinity.Mask = Prcb->CoreProcessorSet;
+        ProcNumber = KeFindFirstSetLeftGroupAffinity(&GroupAffinity);
+
+        if (Prcb->Number == ProcNumber) {
+
+            //
+            // If this core has more than one logical processor, then
+            // mark it as an SMT relationship.
+            //
+
+            if (Prcb->GroupSetMember != GroupAffinity.Mask) {
+                Flags = LTP_PC_SMT;
+            }
+
+            CurrentLength += sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION);
+
+            if (CurrentLength <= SystemInformationLength) {
+
+                RtlZeroMemory(&LocalOutput, sizeof(LocalOutput));
+
+                LocalOutput.ProcessorMask = GroupAffinity.Mask;
+                LocalOutput.Relationship = RelationProcessorCore;
+                LocalOutput.ProcessorCore.Flags = Flags;
+
+                __try {
+                    WriteStructToMode(Output, &LocalOutput, PreviousMode);
+                } __except(UmaExceptionFilter(PreviousMode)) {
+                    Status = GetExceptionCode();
+                    goto exit;
+                }
+
+                Output += 1;
+
+            } else {
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+            }
+        }
+
+        //
+        // RelationCache:
+        //
+        // Add a record for each cache level associated with the physical
+        // processor.
+        //
+
+        for (Level = 0; Level < Prcb->CacheCount; Level += 1) {
+
+            GroupAffinity.Group = Group;
+            GroupAffinity.Mask = KeQueryGroupAffinityEx(
+                                    &Prcb->CacheProcessorSet[Level],
+                                    Group);
+
+            NT_ASSERT(GroupAffinity.Mask != 0);
+
+            //
+            // Don't add shared caches more than once.
+            //
+
+            ProcNumber = KeFindFirstSetLeftGroupAffinity(&GroupAffinity);
+
+            if (Prcb->Number != ProcNumber) {
+                continue;
+            }
+
+            CurrentLength += sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION);
+
+            if (CurrentLength <= SystemInformationLength) {
+
+                RtlZeroMemory(&LocalOutput, sizeof(LocalOutput));
+
+                LocalOutput.ProcessorMask = GroupAffinity.Mask;
+                LocalOutput.Relationship = RelationCache;
+                LocalOutput.Cache = Prcb->Cache[Level];
+
+                __try {
+                    WriteStructToMode(Output, &LocalOutput, PreviousMode);
+                } __except(UmaExceptionFilter(PreviousMode)) {
+                    Status = GetExceptionCode();
+                    goto exit;
+                }
+
+                Output += 1;
+
+            } else {
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+            }
+        }
+    }
+
+    //
+    // Add a record for each node in the host system.
+    //
+
+    for (Index = 0; Index < KeNumberNodes; Index += 1) {
+
+        Node = KeNodeBlock[Index];
+        SubNode = KiGetSubNodeForGroup(Node, Group);
+
+        if (SubNode == NULL) {
+            continue;
+        }
+
+        NT_ASSERT(SubNode->Affinity.Group == Group);
+
+        if (SubNode->Affinity.Mask == 0) {
+            continue;
+        }
+
+        GroupAffinity.Mask = SubNode->Affinity.Mask;
+
+        CurrentLength += sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION);
+        if (CurrentLength <= SystemInformationLength) {
+
+            RtlZeroMemory(&LocalOutput, sizeof(LocalOutput));
+
+            LocalOutput.ProcessorMask = GroupAffinity.Mask;
+            LocalOutput.Relationship = RelationNumaNode;
+            LocalOutput.NumaNode.NodeNumber = Index;
+
+            __try {
+                WriteStructToMode(Output, &LocalOutput, PreviousMode);
+            } __except(UmaExceptionFilter(PreviousMode)) {
+                Status = GetExceptionCode();
+                goto exit;
+            }
+
+            Output += 1;
+
+        } else {
+            Status = STATUS_INFO_LENGTH_MISMATCH;
+        }
+    }
+
+    //
+    // Return the length of the buffer required to hold the entire set of
+    // information.
+    //
+
+    *ReturnedLength = CurrentLength;
+
+exit:
+
+    return Status;
+}

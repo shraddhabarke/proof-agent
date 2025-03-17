@@ -1,0 +1,773 @@
+User-mode accessors are dedicated functions used to interact with user-mode memory. We must enforce that no user-mode memory accesses happen outside of the user-mode accessor API's that we publish.
+
+
+User-mode accesses bring significant security improvements to Windows:
+
+* They prevent the compiler from performing unwanted optimizations on user-mode memory accesses (such as double-fetching data from user-mode which can lead to bypasses of parameter validation).
+* They allow Microsoft to improve the hardening of the user/kernel boundary in the future.
+** Linux has a safe-user-copy where-by their user-mode accessors validate they are not overflowing kernel buffers prior to copying data from user-mode.
+** Linux also updated their user-mode accessors to better harden against speculative execution attacks.
+* They make it extremely obvious when code is interacting with user-mode memory (which is untrusted). This will prevent programming mistakes such as the developer writing code to access the same user-mode data twice (bypassing their own validation).
+* They will allow us to use critical CPU features such as SMAP and PAN in the future. Windows is the last major OS that cannot leverage these features.
+
+
+'''NOTE: User-mode accessors are currently only available to NT and SK. We will expand them to drivers in the near future.'''
+
+== Examples ==
+We will start with examples because they are very understandable on their own. These examples contain comments with IMPORTANT notes about key points to take into consideration to ensure that app compat is not broken. Please read ALL examples.
+
+=== Porting System Call with an In-Parameter and no Alignment Checking ===
+
+==== Before ====
+ NTSTATUS
+ ExampleSysCall1 (
+     ULONG* Param1
+     )
+ {
+     ULONG Local;
+ 
+     __try {
+ 
+         //
+         // An alignment of 1 means no alignment checking.
+         // This API expects Param1 is ALWAYS pointing to
+         // user-mode.
+         //
+ 
+         ProbeForRead(Param1, sizeof(ULONG), 1);
+         Local = *Param1;
+     } __except (EXCEPTION_EXECUTE_HANDLER) {
+         return GetExceptionCode();
+     }
+ }
+
+==== After ====
+ NTSTATUS
+ ExampleSysCall1 (
+     ULONG* Param1
+     )
+ {
+     ULONG Local;
+ 
+     __try {
+ 
+         //
+         // Can replace with ReadULongFromUser which does no
+         // alignment check but does ensure Param1 points at
+         // user-mode.
+         //
+ 
+         Local = ReadULongFromUser(Param1);
+     } __except (EXCEPTION_EXECUTE_HANDLER) {
+         return GetExceptionCode();
+     }
+ }
+
+=== Porting System Call with an In-Parameter and Alignment Checking ===
+
+==== Before ====
+ NTSTATUS
+ ExampleSysCall2 (
+     ULONG* Param1
+     )
+ {
+     ULONG Local;
+ 
+     __try {
+ 
+         //
+         // Alignment is 4, and the alignment check is the first
+         // thing ProbeForRead does. This returns a unique error
+         // code versus the address being aligned but not pointing
+         // at user-mode memory.
+         //
+         // This API expects Param1 is ALWAYS pointing to
+         // user-mode.
+         //
+ 
+         ProbeForRead(Param1, sizeof(ULONG), 4);
+         Local = *Param1;
+     } __except (EXCEPTION_EXECUTE_HANDLER) {
+         return GetExceptionCode();
+     }
+ }
+
+==== After ====
+ NTSTATUS
+ ExampleSysCall2 (
+     ULONG* Param1
+     )
+ {
+     ULONG Local;
+ 
+     __try {
+ 
+         //
+         // Must call ExProbeAlignment to do alignment check prior
+         // to calling ReadULongFromUser (that checks the pointer is
+         // pointing at user-mode memory) so that the error handling
+         // return codes are identical.
+         //
+ 
+         ExProbeAlignment(Param1, sizeof(ULONG), 4);
+         Local = ReadULongFromUser(Param1);
+     } __except (EXCEPTION_EXECUTE_HANDLER) {
+         return GetExceptionCode();
+     }
+ }
+
+=== Porting System Call with an In-Out-Parameter and Alignment Checking ===
+
+==== Before ====
+ NTSTATUS
+ ExampleSysCall3 (
+     ULONG* Param1
+     )
+ {
+     ULONG Local;
+ 
+     __try {
+ 
+         //
+         // Note that ProbeForWrite performs writes to the memory supplied
+         // after performing alignment checks. This will catch a case where
+         // a read-only buffer is passed to the system call.
+ 
+         ProbeForWrite(Param1, sizeof(ULONG), 4);
+         Local = *Param1;
+     } __except (EXCEPTION_EXECUTE_HANDLER) {
+         return GetExceptionCode();
+     }
+ 
+     ...
+     ...
+ 
+     Status = DoStuff(&Local);
+ 
+     ...
+     ...
+ 
+     __try {
+         *Param1 = Local;
+     } __except (EXCEPTION_EXECUTE_HANDLER) {
+ 
+         //
+         // Notice that we return STATUS_SUCCESS even if we fail to write to
+         // the out-parameter. This is a somewhat common pattern in syscalls.
+         //
+ 
+         return STATUS_SUCCESS;
+     }
+ }
+
+==== After ====
+ NTSTATUS
+ ExampleSysCall3 (
+     ULONG* Param1
+     )
+ {
+     ULONG Local;
+ 
+     __try {
+ 
+         //
+         // It may be tempting to eliminate the ProbeForWrite but this is a
+         // compat issue. If ProbeForWrite is not called, it will not detect
+         // the buffer is read-only and return an error. When we finally write
+         // to the buffer later on, we swallow any exceptions and always return
+         // STATUS_SUCCESS. We have seen real cases where apps depend on this
+         // error handling logic (i.e. the app has some bug and never actually
+         // successfully uses our API, and we eliminate the ProbeForWrite and allow
+         // them to successfully call the API the app breaks.
+         //
+ 
+         ProbeForWrite(Param1, sizeof(ULONG), 4);
+         Local = ReadULongFromUser(Param1);
+     } __except (EXCEPTION_EXECUTE_HANDLER) {
+         return GetExceptionCode();
+     }
+ 
+     ...
+     ...
+ 
+     Status = DoStuff(&Local);
+ 
+     ...
+     ...
+ 
+     __try {
+ 
+         //
+         // Notice that we return STATUS_SUCCESS even if we fail to write to
+         // the out-parameter. This is a somewhat common pattern in syscalls.
+         //
+ 
+         WriteULongToUser(Param1, Local);
+     } __except (EXCEPTION_EXECUTE_HANDLER) {
+         return STATUS_SUCCESS;
+     }
+ }
+
+=== Porting System Call that Accepts User-Mode or Kernel-Mode Pointers but Only Uses SEH for User-Mode Accesses ===
+
+==== Before ====
+ NTSTATUS
+ ExampleSysCall4 (
+     ULONG* Param1
+     )
+ {
+     ULONG Local;
+     KPROCESSOR_MODE PreviousMode;
+ 
+     PreviousMode = KeGetPreviousMode();
+ 
+     //
+     // In this example the user-mode pointer is dereferenced within
+     // SEH scope but the kernel-mode pointer is not.
+     //
+ 
+     if (PreviousMode != KernelMode) {
+         __try {
+             ProbeForRead(Param1, sizeof(ULONG), 1);
+             Local = *Param1;
+         } __except (EXCEPTION_EXECUTE_HANDLER) {
+             return GetExceptionCode();
+         }
+     } else {
+         Local = *Param1;
+     }
+ 
+     ...
+     ...
+ }
+
+==== After ====
+ NTSTATUS
+ ExampleSysCall4 (
+     ULONG* Param1
+     )
+ {
+     ULONG Local;
+     KPROCESSOR_MODE PreviousMode;
+ 
+     PreviousMode = KeGetPreviousMode();
+ 
+     __try {
+ 
+         //
+         // The "Mode" accessor will do a user-mode access if the mode passed
+         // is UserMode and a normal non-volatile access otherwise.
+         //
+ 
+         Local = ReadULongFromMode(Param1, PreviousMode);
+     } __except (UmaExceptionFilter(PreviousMode)) {
+ 
+         //
+         // This preserves the old exception handling logic. UmaExceptionFilter
+         // returns EXCEPTION_EXECUTE_HANDLER if PreviousMode == UserMode. It
+         // returns EXCEPTION_CONTINUE_SEARCH if PreviousMode == KernelMode.
+         //
+ 
+         return GetExceptionCode();
+     }
+ 
+ 
+     ...
+     ...
+ }
+
+=== Porting System Call that Accepts User-Mode or Kernel-Mode Pointers and Uses SEH for User-Mode and Kernel-Mode Accesses ===
+
+==== Before ====
+ NTSTATUS
+ ExampleSysCall5 (
+     ULONG* Param1
+     )
+ {
+     ULONG Local;
+     KPROCESSOR_MODE PreviousMode;
+ 
+     PreviousMode = KeGetPreviousMode();
+ 
+     //
+     // In this example the user-mode and kernel-mode pointer are dereferenced
+     // within SEH scope. This is not great, but changing this behavior has
+     // been causing compatibility issues.
+     //
+     // The most common issue is a driver passing a NULL pointer even though
+     // it is not an optional parameter (but the SEH catches the NULL pointer
+     // dereference exception).
+     //
+     // Another less common issue is a driver incorrectly passing a user-mode
+     // address. Things like Zw system calls are not supposed to be passed user
+     // addresses but some drivers do it incorrectly and rely on the SEH scope
+     // to catch any exceptions generated. These are ALL bugs and likely also
+     // vulnerabilities in the offending driver.
+     //
+ 
+     __try {
+         if (PreviousMode != KernelMode) {
+             ProbeForRead(Param1, sizeof(ULONG), 1);
+         }
+ 
+         Local = *Param1;
+     } __except (EXCEPTION_EXECUTE_HANDLER) {
+         return GetExceptionCode();
+     }
+     ...
+     ...
+ }
+
+==== After ====
+ NTSTATUS
+ ExampleSysCall5 (
+     ULONG* Param1
+     )
+ {
+     ULONG Local;
+     KPROCESSOR_MODE PreviousMode;
+ 
+     PreviousMode = KeGetPreviousMode();
+ 
+     __try {
+         
+         //
+         // The "Mode" accessor will do a user-mode access if the mode passed
+         // is UserMode and a normal non-volatile access otherwise.
+         //
+ 
+         Local = ReadULongFromMode(Param1, PreviousMode);
+     } __except (EXCEPTION_EXECUTE_HANDLER) {
+ 
+         //
+         // The most compatible way to port this code is to NOT use
+         // UmaExceptionFilter but instead keep catching all exceptions (
+         // both user-mode and kernel-mode).
+         //
+ 
+         return GetExceptionCode();
+     }
+     ...
+     ...
+ }
+
+=== Porting System Call that Handles Multiple Types of Exceptions in SEH Scope ===
+
+==== Before ====
+ NTSTATUS
+ ExampleSysCall6 (
+     BYTE* Buffer
+     SIZE_T Size
+     )
+ {
+     KPROCESSOR_MODE PreviousMode;
+     BYTE* NewBuffer = NULL;
+     NTSTATUS Status;
+ 
+     PreviousMode = KeGetPreviousMode();
+ 
+     __try {
+         if (PreviousMode != KernelMode) {
+             ProbeForRead(Buffer, Size, 1);
+         }
+ 
+         //
+         // ExAllocatePool2 will throw on failure, so SEH scope MUST always be
+         // present. More generally, extreme care must be taken with SEH scoping
+         // because SEH may be used both to catch exceptions accessing user-mode
+         // memory but also to catch exceptions from other throwing functions that
+         // may throw even when PreviousMode == KernelMode.
+         //
+ 
+         NewBuffer = ExAllocatePool2(POOL_FLAG_PAGED | POOL_FLAG_RAISE_ON_FAILURE,
+                                     Size,
+                                     'JoeB');
+ 
+ 	RtlCopyMemory(NewBuffer, Buffer, Size);
+ 
+         Status = DoStuff(SafeBuffer);
+     } __except (EXCEPTION_EXECUTE_HANDLER) {
+         Status = GetExceptionCode();
+         goto Done;
+     }
+ 
+ Done:
+     ...
+     ...
+ }
+
+==== After ====
+ NTSTATUS
+ ExampleSysCall6 (
+     BYTE* Buffer
+     SIZE_T Size
+     )
+ {
+     KPROCESSOR_MODE PreviousMode;
+     BYTE* NewBuffer = NULL;
+     NTSTATUS Status;
+ 
+     PreviousMode = KeGetPreviousMode();
+ 
+     __try {
+         if (PreviousMode != KernelMode) {
+ 
+             //
+             // ProbeForRead must be preserved to keep error handling error paths
+             // the same. Passing an illegal pointer always returns a
+             // STATUS_ACCESS_VIOLATION, not an out-of-memory status code from the
+             // pool allocator potentially failing.
+             //
+ 
+             ProbeForRead(Buffer, Size, 1);
+         }
+ 
+         NewBuffer = ExAllocatePool2(POOL_FLAG_PAGED | POOL_FLAG_RAISE_ON_FAILURE,
+                                     Size,
+                                     'JoeB');
+ 
+         //
+         // Is a memcpy when PreviousMode is KernelMode, otherwise uses a variable
+         // size user-mode accessor with memcpy-like semantics. Enforces the pointer
+         // is a user-mode pointer if PreviousMode == UserMode.
+         //
+ 
+ 	CopyFromMode(NewBuffer, Buffer, Size, PreviousMode);
+ 
+         Status = DoStuff(SafeBuffer);
+     } __except (EXCEPTION_EXECUTE_HANDLER) {
+         Status = GetExceptionCode();
+         goto Done;
+     }
+ 
+ Done:
+     ...
+     ...
+ }
+
+== New API's ==
+See usermode_accessors.w for the full list of user-mode accessors.
+
+=== Alignment Checking ===
+A new FORCEINLINE called ExProbeAlignment has been added that only performs alignment checking. This API takes the pointer, the buffer size, and the desired alignment. If the size is zero, no alignment checking is performed (to match the legacy behavior of ProbeForRead/ProbeForWrite).
+
+=== Simple Memory Accesses ===
+For simple memory accesses (reading/writing a simple type like a ULONG), a number of API's exist. These API's have a base name that may be followed by one of the following suffixes described in the below table.
+
+The API's are named using the following formula:
+
+* Read<Type>FromUser<Suffix>
+
+* Write<Type>ToUser<Suffix>
+
+{| class="wikitable"
+|+Types Supported
+!Type
+!Underlying Type
+|-
+|Boolean
+|BOOLEAN
+|-
+|UChar
+|UCHAR
+|-
+|Char
+|CHAR
+|-
+|WChar
+|WCHAR
+|-
+|UShort
+|USHORT
+|-
+|Short
+|SHORT
+|-
+|ULong
+|ULONG
+|-
+|Long
+|LONG
+|-
+|ULonglong
+|ULONGLONG
+|-
+|Longlong
+|LONGLONG
+|-
+|ULong64
+|ULONG64
+|-
+|Long64
+|LONG64
+|-
+|ULongPtr
+|ULONG_PTR
+|-
+|LongPtr
+|LONG_PTR
+|-
+|UInt8
+|UINT8
+|-
+|Int8
+|INT8
+|-
+|UInt16
+|UINT16
+|-
+|Int16
+|INT16
+|-
+|UInt32
+|UINT32
+|-
+|Int32
+|INT32
+|-
+|UInt64
+|UINT64
+|-
+|Int64
+|INT64
+|-
+|UIntPtr
+|UINT_PTR
+|-
+|IntPtr
+|INT_PTR
+|-
+|Pointer
+|PVOID
+|-
+|SizeT
+|SIZE_T
+|-
+|SSizeT
+|SSIZE_T
+|-
+|Handle
+|HANDLE
+|-
+|NtStatus
+|NTSTATUS
+|}
+{| class="wikitable"
+|+Suffixes Supported
+!Suffix
+!Description
+|-
+|<No Suffix>
+|If the operation has no suffix, it operates only on user-mode memory and uses a volatile access. This volatile access does NOT use Acquire/Release semantics on platforms such as ARM64 which expose these semantics.
+|-
+|Acquire
+|The operation has Acquire semantics.
+|-
+|Release
+|The operation has release semantics.
+|-
+|Mode
+|The operation takes a KPROCESSOR_MODE parameter. If this parameter equals KernelMode, the operation is performed on kernel-mode memory without any volatile semantics. If this operation is performed against user-mode memory, it uses volatile. Note that there are not Acquire/Release semantic versions of these API's.
+|}
+Some examples:
+
+* ReadULongFromUserAcquire - Read a ULONG from user-mode with acquire semantics.
+* WritePointerToUserRelease - Write a PVOID to user-mode with release semantics.
+* ReadUCharFromMode - Read a UCHAR from either kernel-mode memory or user-mode memory depending on the value of the KPROCESSOR_MODE function parameter.
+* WriteULonglongToUser - Write a ULONGLONG to user-mode without explicit release semantics.
+
+=== Complex Memory Accesses ===
+The following complex memory operations are currently supported. More can (and are expected to be) added in the future.
+{| class="wikitable"
+|+
+!Function Name
+!Description
+|-
+|CopyToUser
+|Memcpy-like functionality to copy data from kernel-mode to user-mode memory.
+|-
+|CopyFromUser
+|Memcpy-like functionality to copy data from user-mode to kernel-mode memory.
+|-
+|CopyToMode
+|Memcpy-like functionality to copy data from kernel-mode to either user-mode memory or kernel-mode memory depending on the KPROCESSOR_MODE parameter supplied.
+|-
+|CopyFromMode
+|Memcpy-like functionality to copy data from either user-mode memory or kernel-mode memory to kernel-mode memory depending on the KPROCESSOR_MODE parameter supplied.
+|-
+|CopyToUserFromUser
+|Memcpy-like functionality to copy data from user-mode to user-mode memory.
+|-
+|CopyFromUserToMode
+|Memcpy-like functionality to copy data from user-mode memory to either user-mode memory or kernel-mode memory depending on the KPROCESSOR_MODE parameter supplied.
+|-
+|MoveToUserFromUser
+|Memmove-like functionality to copy potentially overlapping buffers from user-mode to user-mode memory.
+|-
+|StringLengthFromUser
+|strlen-like functionality to determine the length of a NULL-terminated string from user-mode memory. Note that user-mode can modify the string while or after this function runs!
+|-
+|StringLengthFromMode
+|strlen-like functionality to determine the length of a NULL-terminated string from either user-mode memory or kernel-mode memory to kernel-mode memory depending on the KPROCESSOR_MODE parameter supplied. Note that user-mode can modify the string while or after this function runs!
+|-
+|WideStringLengthFromUser
+|wcslen-like functionality to determine the length of a NULL-terminated string from user-mode memory. Note that user-mode can modify the string while or after this function runs!
+|-
+|WideStringLengthFromMode
+|wcslen-like functionality to determine the length of a NULL-terminated string from either user-mode memory or kernel-mode memory to kernel-mode memory depending on the KPROCESSOR_MODE parameter supplied. Note that user-mode can modify the string while or after this function runs!
+|-
+|FillUserMemory
+|An equivalent to RtlFillMemory that operates against user-mode memory.
+|-
+|FillModeMemory
+|An equivalent to RtlFillMemory that operates against user-mode memory or kernel-mode memory to kernel-mode memory depending on the KPROCESSOR_MODE parameter supplied.
+|-
+|ZeroUserMemory
+|An equivalent to RtlZeroMemory that operates against user-mode memory.
+|-
+|ZeroModeMemory
+|An equivalent to RtlZeroMemory that operates against user-mode memory or kernel-mode memory to kernel-mode memory depending on the KPROCESSOR_MODE parameter supplied.
+|-
+|SetUserMemory
+|An equivalent to RtlSetMemory that operates against user-mode memory.
+|-
+|SetModeMemory
+|An equivalent to RtlSetMemory that operates against user-mode memory  or kernel-mode memory to kernel-mode memory depending on the KPROCESSOR_MODE parameter supplied.
+|-
+|WriteStructToMode
+|Copies a structure from kernel-mode memory to either user-mode or kernel-mode memory depending on the KPROCESSOR_MODE parameter supplied. Padding IS copied.
+|-
+|WriteStructToModeAligned
+|Copies a structure from kernel-mode memory to either user-mode or kernel-mode memory depending on the KPROCESSOR_MODE parameter supplied. Padding IS copied. Alignment of the user-mode buffer is checked against the Alignment parameter.
+|-
+|ReadStructFromMode
+|Copies a structure from either user-mode memory or kernel-mode memory to kernel-mode memory depending on the KPROCESSOR_MODE parameter supplied. Padding IS copied.
+|-
+|ReadStructFromModeAligned
+|Copies a structure from either user-mode memory or kernel-mode memory to kernel-mode memory depending on the KPROCESSOR_MODE parameter supplied. Padding IS copied. Alignment of the user-mode buffer is checked against the Alignment parameter.
+|-
+|WriteStructToUser
+|Copies a structure from kernel-mode memory to user-mode memory. Padding IS copied.
+|-
+|WriteStructToUserAligned
+|Copies a structure from kernel-mode memory to user-mode memory. Padding IS copied. Alignment of the user-mode buffer is checked against the Alignment parameter.
+|-
+|ReadStructFromUser
+|Copies a structure from user-mode memory to kernel-mode memory. Padding IS copied.
+|-
+|ReadStructFromUserAligned
+|Copies a structure from user-mode memory to kernel-mode memory. Padding IS copied. Alignment of the user-mode buffer is checked against the Alignment parameter.
+|-
+|WriteLargeIntegerToUser
+|Copies a LARGE_INTEGER from kernel-mode memory to user-mode memory.
+|-
+|ReadLargeIntegerFromUser
+|Copies a LARGE_INTEGER from user-mode memory to kernel-mode memory.
+|-
+|WriteLargeIntegerToMode
+|Copies a LARGE_INTEGER from kernel-mode memory to either user-mode or kernel-mode memory depending on the KPROCESSOR_MODE parameter.
+|-
+|ReadLargeIntegerFromMode
+|Copies a LARGE_INTEGER from user-mode memory to either user-mode or kernel-mode memory depending on the KPROCESSOR_MODE parameter.
+|-
+|WriteULargeIntegerToUser
+|Copies a ULARGE_INTEGER from kernel-mode memory to user-mode memory.
+|-
+|ReadULargeIntegerFromUser
+|Copies a ULARGE_INTEGER from user-mode memory to kernel-mode memory.
+|-
+|WriteULargeIntegerToMode
+|Copies a ULARGE_INTEGER from kernel-mode memory to either user-mode or kernel-mode memory depending on the KPROCESSOR_MODE parameter.
+|-
+|ReadULargeIntegerFromMode
+|Copies a ULARGE_INTEGER from user-mode memory to either user-mode or kernel-mode memory depending on the KPROCESSOR_MODE parameter.
+|-
+|WriteUnicodeStringToUser
+|Copies a UNICODE_STRING from kernel-mode memory to user-mode memory. No padding bytes are copied. Only the UNICODE_STRING fields themselves are copied, not the Buffer data.
+|-
+|ReadUnicodeStringFromUser
+|Copies a UNICODE_STRING from user-mode memory to kernel-mode memory. No padding bytes are copied. Only the UNICODE_STRING fields themselves are copied, not the Buffer data.
+|-
+|WriteUnicodeStringToMode
+|Copies a UNICODE_STRING from kernel-mode memory to either user-mode or kernel-mode memory depending on the KPROCESSOR_MODE parameter. No padding bytes are copied if copying to user-mode memory but padding may be copied if copying to kernel-mode memory. Only the UNICODE_STRING fields themselves are copied, not the Buffer data.
+|-
+|ReadUnicodeStringFromMode
+|Copies a UNICODE_STRING from user-mode memory to either user-mode or kernel-mode memory depending on the KPROCESSOR_MODE parameter. No padding bytes are copied if copying from user-mode memory but padding may be copied if copying from kernel-mode memory. Only the UNICODE_STRING fields themselves are copied, not the Buffer data.
+|}
+
+== Q/A ==
+
+=== What should I do if a user-mode accessor API I need is not available? ===
+Contact [mailto:umaccessors@microsoft.com umaccessors@microsoft.com] and we will build it for you. All user-mode accessors need to be centrally managed.
+
+=== Is updating my code painful? ===
+The accessor API's have been designed such that they mostly drop in-place in existing code. We can add new API's as needed.
+
+=== What about accessing user-mode memory via an MDL mapped in kernel-mode? ===
+These API's only apply to memory accesses in the user-mode virtual address space. They do not apply to MDL mappings. You should still use '''volatile accessors''' for this memory model (ReadNoFence/WriteNoFence/etc.).
+
+=== If my code compiles was using raw volatile accesses on ARM64 (i.e. directly dereferencing a volatile pointer without __iso_volatile [https://learn.microsoft.com/en-us/cpp/intrinsics/arm64-intrinsics?view=msvc-170#IsoVolatileLoadStore ARM64 intrinsics | Microsoft Learn] or wrapper API's like ReadULongNoFence), are there additional porting considerations? ===
+If your source code was directly dereferencing volatile pointers (either reading or writing), those dereferences automatically have Acquire semantics applied to loads and Release semantics applied to stores. In many cases the Acquire/Release semantics automatically applied to these accesses is unnecessary and causes performance overhead. The no-suffix user-mode accessors do not have Acquire/Release semantics and are equivalent to an API like ReadULongNoFence. If Acquire/Release semantics are needed, the appropriate user-mode accessor API must be used.
+ NTSTATUS
+ ExampleSysCall (
+     LONG* Param1
+     )
+ {
+     LONG LocalParam = *(volatile LONG*) Param1; // raw volatile access
+     DoStuff(LocalParam);
+     ...
+     ...
+ }
+
+=== When I port code to user-mode accessors, do I need to keep existing calls to ProbeForRead and ProbeForWrite? ===
+Possibly. Here's some things to consider:
+
+# If your API has code paths that will do things such as ProbeAndLock this pointer, it needs to be probed.
+# If you are passing this pointer to other API's that expect you have already probed it (i.e. to ensure it is user-mode memory you are passing the API), it still needs to be probed.
+# If you need alignment checks, you need to at a minimum use an API that performs alignment checking.
+# If your API has different behavior when the probe fails versus when the read or write of the pointer fails, you may need to keep your probe. For example, NtProtectVirtualMemory calls ProbeForWrite at the start of the function and returns an error code if this fails. Prior to the function returning it attempts to write through this pointer. If this write fails the function will still succeed. Eliminating the ProbeForWrite in favor of only having a user-mode accessor changes the user-mode visible behavior of the API in a manner that is still secure from the kernel's perspective but breaks application compatibility.
+## In the case of NtProtectVirtualMemory, the ProbeForWrite cannot be replaced with a ProbeForRead either. The ProbeForWrite (which does an explicit store to the pointer) is intended to catch callers passing a NULL pointer to the API which a ProbeForRead would accept.
+
+=== My code is writing to a bitfield, but I can't do address of a bitfield, what do I do? ===
+You can't write to a single bit with UMA. You will need to read in the entire bitfield and write it out with the modifications to your bitmask. If you bitfield is not encapsulated in a union, you will likely have to do so, here is an example:<syntaxhighlight lang="c++">
+union {
+    ULONG Bits;
+    struct {
+        ULONG Version : 8;
+        ULONG ProcessEnableWriteExceptions : 1;
+        ULONG ThreadAllowWrites : 1;
+        ULONG Spare : 22;
+    } DUMMYSTRUCTNAME;
+} DUMMYUNIONNAME;
+</syntaxhighlight>
+
+=== My code uses __ptr32, __sptr, and/or __uptr, what should I do? ===
+We do not provide API's that take 32bit pointers. You should convert your 32bit pointer to a 64bit pointer, or vice-versa, using `PtrToUlong` and `UlongToPtr` and then use the corresponding UMA.
+
+=== How do I determine the correct access mode to use? ===
+Most of the time the access mode that is needed can be determined by the PreviousMode disposition, which is either Kernel or User. In the flow of a syscall, if the call was made by a user-mode process PreviousMode will be equal to UserMode. System calls however can be made by kernel-mode callers as well and in that case PreviousMode == KernelMode. This is why we have a whole suite of accessors that are `ToMode` and `FromMode`. You can just pass in the PreviousMode and the "correct" behavior will occur.
+
+This may not always be the case. Some functions will have code where the output could be either user mode or kernel mode, but they touch something that is always in usermode, like the PEB or the TEB. For these places we have some additional helpers you may need. `CopyFromUserToMode` and `CopyToUserFromUser`.
+
+If you find yourself in a place where the AccessMode and the previous mode disposition can be either UserMode or KernelMode. i.e. You think you may need something like CopyFromModeToMode, please contact the umaccessors@microsoft.com mailing list. These are likely security sensitive areas, and each case will need to be handled separately.
+
+== Things to be on the lookout for ==
+
+=== Kernel to User Out of Bounds(OOB)Read(R) and OOBWrite(W) may become Kernel to Kernel OOB and OOW ===
+Porting your code to use UMA may provoke you to copy more data from user-mode to kernel-mode, instead of interacting with it in place byte by byte. In general, we believe this to be a correct approach. '''Be cautious!''' The code you are porting may have bugs in it that write or read past the end of buffers in user-mode. This '''will''' become a security issue if your code does this against a copied buffer in kernel space. An innocent OOBR could become an information disclosure, and an OOBW could become an EOP or a DOS.
+
+=== Manually Programmed Double Fetches ===
+Manually program double fetches are when kernel code reads the value of a usermode control value twice without caching it in a local variable. This can lead to time of check time of use attacks (TOCTOU). [https://microsoft.visualstudio.com/OS/_workitems/edit/51378814 Here is a really simple MSRC case] that demonstrates this point.
+
+=== Unprobed User-mode access ===
+Be on the lookout for user-mode accesses that are not probed. [https://microsoft.visualstudio.com/OS/_workitems/edit/51676795 Here is a really simple MSRC case] that can help you understand the details of what we are talking about.
+
+=== User-mode access outside of a try/catch ===
+Finding user-mode accesses outside of a try catch can be turned into a local DOS. If you think they could be turned into a remote DOS, please create a MSRC case. Either way fix them by putting them inside a __try/__except.
+
+== Workarounds/Problems ==
+
+=== I produce a published static library in NTOS that needs to use UMA, but umaccess.lib is not published. ===
+Right now, the umaccess.lib is intended for NTOS and SK only. If you encounter this issue, please hold off on fixing UMA bugs until the tooling is published. You can resolve the bugs as won't fix for now, and we will reactivate them later.
+
+== UMA Coding Recommendations ==

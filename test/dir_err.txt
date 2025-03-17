@@ -1,0 +1,13 @@
+In 2-3 sentences, what is the bug and what’s the fix?
+As part of the User-Mode Accessor conversion work as part of SFI, we strengthened/hardened exception handling for the case where the PreviousMode is KernelMode (the caller of the kernel API is kernel-mode). If the PreviousMode is KernelMode, then all exceptions due to bad input parameters are fatal. The reasoning for this is that kernel-mode code should always ensure that the parameters it is passing into kernel APIs are valid. The specific hardening that we performed was to change try/except scopes that perform parameter validation to use UmaExceptionFilter(PreviousMode) instead of EXCEPTION_EXECUTE_HANDLER, such that the exception is not caught if the PreviousMode is KernelMode. Unfortunately, IoMgr code that was written decades ago uses a bad coding pattern that has huge try/except scopes that contain much more than just parameter validation. In fact, IoMgr is one of the few components in the kernel that uses POOL_FLAG_RAISE_ON_FAILURE (raise an exception if a pool allocation fails), and puts the pool allocations inside the huge try/except scopes. After the UMA hardening of exception handling, this means that if a pool allocation fails due to the system being out of memory when in IO API calls where the caller is KernelMode, the pool allocation fail causes an unhandled exception and therefore a bugcheck, instead of failing gracefully.
+The fix is to break down the huge try/except scopes to only contain user-mode accesses and stop using POOL_FLAG_RAISE_ON_FAILURE for those memory allocations, which results in memory allocation failures being handled gracefully again (i.e. the API returns an error instead of bugchecking).
+
+Note that source lines are provided on a best-effort basis and may not always be accurate. Typically, the source line that made a usermode access may be the line preceding or following the line that was quoted in the report. The module offsets, however, are always accurate, and can be used as a last resort for investigation.
+
+=================================================================================
+Defect #0
+=================================================================================
+
+Normal usermode access at BuildQueryDirectoryIrp0x403 -- minkerneltos\io\iomgr\dir.c:400 (ntkrnlmp.exe+0xb5d683)
+396:                // auxiliary buffer.397:                //398:399:                nameBuffer = (PUNICODE_STRING) auxiliaryBuffer;400:                nameBuffer->Length = fileName.Length;     <---- HERE401:                nameBuffer->MaximumLength = fileName.Length;402:                nameBuffer->Buffer = (PWSTR) (auxiliaryBuffer + sizeof( UNICODE_STRING ) );403:            }404:        }
+
