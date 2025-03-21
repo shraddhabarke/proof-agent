@@ -1,0 +1,1016 @@
+
+- A First Model of Computational Effects
+
+As a final chapter in this section, we show how inductive types can be
+used model not just data, but also computations , including
+computations with side effects, like mutable state and shared-memory
+concurrency. This is meant to also give a taste of the next section in
+this book, which deals with modeling and proving properties of
+programs with effects and F*’s user-extensible system of indexed
+effects.
+
+Thanks to Guido Martinez and Danel Ahman, for some of the content in
+this chapter.
+
+All the programs we’ve written so far have been purely
+functional. However, one can model programs that manipulate mutable
+state within a purely functional language, and one common but powerful
+way to do this is with something called a monad , an idea that was
+introduced to functional programmers in the late 1980s and early 90s
+by Philip Wadler building on semantic foundations developed by Eugenio Moggi . If you’ve been
+puzzled about monads before, we’ll start from scratch here, and
+hopefully this time it will all make sense!
+
+Consider modeling a program that manipulates a single piece of mutable
+state, just a single integer that programs can read and write, and
+which returns a result of type a . One way to do this is to
+represent such a stateful computation as a program whose type is st a :
+
+let st a = int -> a & int
+
+
+A (st a) computation is a function which when given an initial
+value for the state s0 returns a pair (x, s1) with the result
+of the computation x:a and a final value for the state s1 .
+
+For example, a computation that reads the state, increments it, and
+returns the initial value of the state, can be expressed as shown
+below.
+
+let read_and_increment_v0
+  : st int
+  = fun s0 -> s0, s0 + 1
+
+
+This is pretty straightforward, but writing computations in this style
+can be quite tedious and error prone. For example, if you wanted to
+read the state and increment it twice, one would write:
+
+let inc_twice_v0
+  : st int
+  = fun s0 ->
+      let x, s1 = read_and_increment_v0 s0 in
+      let _, s2 = read_and_increment_v0 s1 in
+      x, s2
+
+
+This is quite clumsy, since at each call to read_and_increment_v0 we had to be careful to pass it the “the most recent version” of the
+state. For instance, a small typo could easily have caused us to write
+the program below, where we pass s0 to the second call of read_and_increment , causing the program to only increment the
+state once.
+
+let inc_twice_buggy
+  : st int
+  = fun s0 ->
+      let x, s1 = read_and_increment_v0 s0 in
+      let _, s2 = read_and_increment_v0 s0 in
+      x, s2
+
+
+The main idea with the state monad is to structure stateful programs
+by abstracting out all the plumbing related to manipulating the state,
+eliminating some of the tedium and possibilities for errors.
+
+The way this works is by defining a functions to read and write the
+state, plus a couple of functions to return a pure value without
+reading or writing the state (a kind of an identity function that’s a
+noop on the state); and a function to sequentially compose a pair of
+stateful computations.
+
+- The function read : st int below, reads the state and returns it,
+without modifying the state.
+
+let read
+  : st int
+  = fun s -> s, s
+
+
+- The function write (s1:int) : st unit below, sets the state to s1 and
+returns () : unit .
+
+let write (s1:int)
+  : st unit
+  = fun _ -> (), s1
+
+
+- The function bind is perhaps the most interesting. Given a
+stateful computation f: st a and another computation g : a -> st b which depends on the result of f and then may read or
+write the state returning a b ; bind f g composes f and g sequentially, passing the initial state s0 to f , then
+passing its result x and next state s1 to g .
+
+let bind #a #b
+         (f: st a)
+         (g: a -> st b)
+  : st b
+  = fun s0 ->
+      let x, s1 = f s0 in
+      g x s1
+
+
+- Finally, return promotes a pure value x:a into an st a ,
+without touching the state.
+
+let return #a (x:a)
+  : st a
+  = fun s -> x, s
+
+
+With these combinators in hand, we can write stateful programs in a
+more compact style, never directly manipulating the underlying integer
+variable that holds the state directly.
+
+Here’s a next attempt at read_and_increment :
+
+let read_and_increment_v1 : st int = 
+  bind read (fun x -> 
+  bind (write (x + 1)) (fun _ -> 
+  return x))
+
+
+Now, you’re probably thinking that this version is even worse than read_and_increment_v0 ! But, the program looks obscure “just”
+because it’s using a convoluted syntax to call bind . Many
+languages, most famously Haskell, provide specialized syntax to
+simplify writing computations that work with APIs like bind and return . F* provides some syntactic sugar to handle this too.
+
+The definition below defines a function with a special name let! . Names of this form, the token let followed by a sequence
+of one or more operator characters such as ! , ? , @ , $ , < , and > are monadic let-binding operators.
+
+let (let!) = bind
+
+
+With let! in scope, the following syntactic sugar becomes available:
+
+- Instead of writing bind f (fun x -> e) you can write let! x = f in e .
+
+- Instead of writing bind f (fun _ -> e) you can write f ;! e , i.e., a semicolon followed the sequence of operator characters
+uses in the monadic let-binding operator.
+
+- Instead of writing bind f (fun x -> match x with ...) , you can
+write match! f with ...
+
+- Instead of writing bind f (fun x -> if x then ...) , you can
+write if! f then ...
+
+See this file MonadicLetBindings.fst for more details an examples of the syntactic sugar.
+
+Using this syntactic sugar, we come to our final version of read_and_increment , where now, hopefully, the imperative-looking
+state updates make the intent of our program clear.
+
+let read_and_increment : st int =
+  let! x = read in
+  write (x + 1) ;!
+  return x
+
+
+Having structured our programs with return and bind , larger st computations can be built from smaller ones, without having to
+worry about how to plumb the state through—that’s handled once and
+for all by our combinators.
+
+let inc_twice : st int = 
+  let! x = read_and_increment in
+  read_and_increment ;!
+  return x
+
+
+It turns out that every API that is structured like our st is an
+instance of a general pattern called a monad , an algebraic
+structure. Specifically, a monad consists of:
+
+- A type operator m : Type -> Type
+
+- A function return (#a:Type) (x:a) : m a
+
+- A function bind (#a #b:Type) (f:m a) (g: a -> m b) : m b
+
+which satisfy the following laws, where ~ is some suitable
+equivalence relation on m a
+
+- Left identity: bind (return x) f ~ f
+
+- Right identity: bind f return ~ f
+
+- Associativity: bind f1 (fun x -> bind (f2 x) f3) ~ bind (bind f1 f2) f3
+
+Its easy to prove that st , return , and bind satisfy these
+laws in F*, where we pick the equivalence relation to equate functions
+that take equal arguments to equal results.
+
+let feq #a #b (f g : a -> b) = forall x. f x == g x
+let left_identity #a #b (x:a) (g: a -> st b)
+  : Lemma ((let! v = return x in g v) `feq` g x)
+  = ()
+let right_identity #a (f:st a)
+  : Lemma ((let! x = f in return x) `feq` f)
+  = ()
+let associativity #a #b #c (f1:st a) (f2:a -> st b) (f3:b -> st c)
+  : Lemma ((let! x = f1 in let! y = f2 x in f3 y) `feq`
+           (let! y = (let! x = f1 in f2 x) in f3 y))
+  = ()
+
+
+These laws are practically useful in that they can catch bugs in our
+implementations of the combinators. For instance, suppose we were to
+write bind_buggy below, which like in inc_twice_buggy ,
+mistakenly re-uses the old state s0 when calling g —in this
+case, the right_identity law below cannot be proved.
+
+let bind_buggy #a #b
+               (f: st a)
+               (g: a -> st b)
+  : st b
+  = fun s0 ->
+      let x, s1 = f s0 in
+      g x s0
+[@@expect_failure]
+let right_identity_fail #a (f:st a)
+  : Lemma (bind_buggy f return `feq` f)
+  = ()
+
+
+We can also prove laws about how the stateful actions, read and write , interact with each other in sequential composition.
+
+let redundant_read_elim ()
+  : Lemma ((read;! read) `feq` read)
+  = ()
+
+let redundant_write_elim (x y:int)
+  : Lemma ((write x ;! write y) `feq` write y)
+  = ()
+
+let read_write_noop ()
+  : Lemma ((let! x = read in write x) `feq` return ())
+  = ()
+
+
+That completes our tour of our very first monad, the state monad.
+
+Make the st type generic, so that instead of the state being fixed
+to a single integer value, it can be used with any type for the
+state. I.e., define st (s:Type) (a:Type) : Type , where s is
+the type of the state.
+
+Adapt the full development seen above to work with st s , including
+proving the various laws.
+
+Exercise file
+
+Answer
+
+module Part2.ST
+
+let st s a = s -> a & s
+
+let read #s
+  : st s s
+  = fun s -> s, s
+
+let write #s (s1:s)
+  : st s unit
+  = fun _ -> (), s1
+
+let bind #s #a #b
+         (f: st s a)
+         (g: a -> st s b)
+  : st s b
+  = fun s0 ->
+      let x, s1 = f s0 in
+      g x s1
+
+let return #s #a (x:a)
+  : st s a
+  = fun s -> x, s
+
+let read_and_increment : st int int =
+  x <-- read;
+  write (x + 1);;
+  return x
+
+let inc_twice : st int int = 
+  x <-- read_and_increment;
+  read_and_increment;;
+  return x
+
+let feq #a #b (f g : a -> b) = forall x. f x == g x
+let left_identity #s #a #b (x:a) (g: a -> st s b)
+  : Lemma ((v <-- return x; g v) `feq` g x)
+  = ()
+let right_identity #s #a (f:st s a)
+  : Lemma ((x <-- f; return x) `feq` f)
+  = ()
+let associativity #s #a #b #c (f1:st s a) (f2:a -> st s b) (f3:b -> st s c)
+  : Lemma ((x <-- f1; y <-- f2 x; f3 y) `feq`
+           (y <-- (x <-- f1; f2 x); f3 y))
+  = ()
+
+let redundant_read_elim ()
+  : Lemma ((read;; read) `feq` read)
+  = ()
+
+let redundant_write_elim (x y:int)
+  : Lemma ((write x ;; write y) `feq` write y)
+  = ()
+
+let read_write_noop ()
+  : Lemma ((x <-- read;  write x) `feq` return ())
+  = ()
+
+
+Monads can be used to model many computational effects, not just
+mutable state.  Another common example is to use monads to model
+computations that may raise runtime errors. Here’s an exercise to help
+you see how.
+
+Prove that the option type can be made into a monad, i.e., define bind and return and prove the monad laws.
+
+Exercise file
+
+Each time one defines a monad to model a computational effect, one
+usually thinks first of the effectful actions involved (e.g.,
+reading and writing the state, or raising an error), and then finds a
+way to package those actions into the interface of monad with return and bind , and then, to keep things honest, proves that
+the implementation satisfies the monad laws.
+
+However, a lot of this is boilerplate and can be done once and for all
+by representing effectful computations not just as functions (as we
+did with st a = int -> a & s ) but instead as an inductive type
+that models a computation tree , with effectful actions made explicit
+at each node in the tree. One can prove that this representation,
+sometimes called a free monad , is a monad, and then instantiate it
+repeatedly for the particular kinds of actions that one may want to
+use in given program.
+
+Note
+
+In this section, we’re scratching the surface of a rich area of
+research called algebraic effects . While what we show here is not
+a full-blown algebraic effects development (we’ll save that for a
+later chapter), here are some other resources about it.
+
+- Alg.fst :
+An F* development with algebraic effects (to be covered in
+detail later).
+
+- Koka , a
+language with algebraic effects at its core
+
+- A bibliography about effects
+
+We’ll start our development of computation trees with a type
+describing the signature of a language of actions.
+
+noeq
+type action_class = {
+  t : Type;
+  input_of : t -> Type;
+  output_of : t -> Type;
+}
+
+
+This kind of signature is sometimes called a type class , a type act:Type , together with some operations it supports. In this case,
+the operations tell us what kind of input and output a given action
+expects.
+
+Note
+
+F* also provides support for type classes and inference of type
+class instantiations. This will be described in a later
+chapter. Meanwhile, you can learn more about type classes in F* from the wiki and from these examples .
+
+For example, if we were interested in just the read/write actions on a
+mutable integer state (as in our st a example), we could build an
+instance of the action_class , as shown below.
+
+type rw =
+  | Read
+  | Write
+
+let input_of : rw -> Type =
+  fun a ->
+    match a with
+    | Read -> unit
+    | Write -> int
+
+let output_of : rw -> Type =
+  fun a ->
+    match a with
+    | Read -> int
+    | Write -> unit
+
+let rw_action_class = { t = rw; input_of ; output_of }
+
+
+However, we can define a type tree acts a , the type of a computation
+tree whose effectful actions are from the class acts , completely
+generically in the actions themselves.
+
+noeq
+type tree (acts:action_class) (a:Type) =
+  | Return : x:a -> tree acts a
+  | DoThen : act:acts.t ->
+             input:acts.input_of act ->
+             continue: (acts.output_of act -> tree acts a) ->
+             tree acts a
+
+
+A tree act a has just two cases:
+
+- Either it is a leaf node, Return x , modeling a computation
+that immediately returns the value x ;
+
+- Or, we have a node DoThen act input k , modeling a computation
+that begins with some action act , to which we pass some input,
+and where k represents all the possible “continuations” of the
+action, represented by a tree act a for each possible output
+returned by the action. That is, DoThen represents a node in
+the tree with a single action and a possibly infinite number of
+sub-trees.
+
+With this representation we can define return and bind , and
+prove the monad laws once and for all.
+
+let return #a #acts (x:a)
+  : tree acts a
+  = Return x
+
+let rec bind #acts #a #b (f: tree acts a) (g: a -> tree acts b)
+  : tree acts b
+  = match f with
+    | Return x -> g x
+    | DoThen act i k ->
+      DoThen act i (fun x -> bind (k x) g)
+
+
+- The return combinator is easy, since we already have a Return leaf node in the tree type.
+
+- The bind combinator is a little more interesting, involving a
+structural recursion over the tree, relying (as we did in the
+previous chapter on well-founded recursion) on the property that all
+the trees returned by k are strictly smaller than the original
+tree f .
+
+To prove the monad laws, we first need to define an equivalence
+relation on trees—this relation is not quite just == , since each
+continuation in the tree is function which itself returns a tree. So,
+we define equiv blow, relating trees that are both Returns , or
+when they both begin with the same action and have
+pointwise-equivalent continuations.
+
+let rec equiv #acts #a (x y: tree acts a) =
+  match x, y with 
+  | Return vx, Return vy -> vx == vy
+  | DoThen actx ix kx, DoThen acty iy ky ->
+    actx == acty /\
+    ix == iy /\
+    (forall o. equiv (kx o) (ky o))
+  | _ -> False
+
+
+Note
+
+We are specifically avoiding the use of functional
+extensionality here, a property which allows
+equating pointwise equal η -expanded functions. We show
+how one can use functional extensionality in this development as an
+advanced exercise.
+
+To prove that equiv is an equivalence relation, here are lemmas
+that prove that it is reflexive, symmetric, and transitive—we see
+here a use of the syntactic sugar for logical connectives, introduced in a previous chapter .
+
+let rec equiv_refl #acts #a (x:tree acts a) 
+  : Lemma (equiv x x)
+  = match x with
+    | Return v -> ()
+    | DoThen act i k -> 
+      introduce forall o. equiv (k o) (k o)
+      with (equiv_refl (k o))
+
+let rec equiv_sym #acts #a (x y:tree acts a) 
+  : Lemma 
+    (requires equiv x y)
+    (ensures equiv y x)
+  = match x, y with
+    | Return _, Return _ -> ()
+    | DoThen act i kx, DoThen _ _ ky -> 
+      introduce forall o. equiv (ky o) (kx o)
+      with equiv_sym (kx o) (ky o)
+
+let rec equiv_trans #acts #a (x y z: tree acts a)
+  : Lemma 
+    (requires equiv x y /\ equiv y z)
+    (ensures equiv x z)
+  = match x, y, z with
+    | Return _, _, _ -> ()
+    | DoThen act i kx, DoThen _ _ ky, DoThen _ _ kz ->
+      introduce forall o. equiv (kx o) (kz o)
+      with equiv_trans (kx o) (ky o) (kz o)
+
+
+Now, we can prove that tree satisifies the monad laws with respect
+to equiv .
+
+let right_identity #acts #a #b (x:a) (g:a -> tree acts b)
+  : Lemma (bind (return x) g `equiv` g x)
+  = equiv_refl (g x)
+
+let rec left_identity #acts #a (f:tree acts a)
+  : Lemma (bind f return `equiv` f)
+  = match f with
+    | Return _ -> ()
+    | DoThen act i k ->
+      introduce forall o. bind (k o) return `equiv` (k o)
+      with left_identity (k o)
+
+let rec assoc #acts #a #b #c 
+              (f1: tree acts a)
+              (f2: a -> tree acts b)
+              (f3: b -> tree acts c)
+  : Lemma (bind f1 (fun x -> bind (f2 x) f3) `equiv`
+           bind (bind f1 f2) f3)
+  = match f1 with
+    | Return v -> 
+      right_identity v f2;
+      right_identity v (fun x -> bind (f2 x) f3)
+    | DoThen act i k ->
+      introduce forall o. bind (k o) (fun x -> bind (f2 x) f3) `equiv`
+                     bind (bind (k o) f2) f3
+      with assoc (k o) f2 f3
+
+
+The associativity law, in particular, should make intuitive sense in
+that a tree acts a represents a computation in a canonical fully
+left-associative form, i.e., a single action followed by its
+continuation. As such, no matter how you associate computations in bind , the underlying representation is always fully
+left-associated.
+
+Having defined our computation trees generically, we can use them with
+any actions we like. For example, here’s our read_and_increment re-built using computation trees.
+
+let read : tree rw_action_class int = DoThen Read () Return
+let write (x:int) : tree rw_action_class unit = DoThen Write x Return
+let read_and_increment 
+  : tree rw_action_class int
+  = x <-- read ;
+    write (x + 1);;
+    return x
+
+
+Finally, given a computation tree we can “run” it, by interpreting it
+as a state-passing function.
+
+let st a = int -> a & int
+let rec interp #a (f: tree rw_action_class a)
+  : st a 
+  = fun s0 -> 
+     match f with
+     | Return x -> x, s0
+     | DoThen Read i k -> 
+       interp (k s0) s0
+     | DoThen Write s1 k -> 
+       interp (k ()) s1
+
+
+Note
+
+A main difference between what we’ve shown here with interp and
+a general treament of algebraic effects is that rather than
+“bake-in” the interpretation of the individual actions in interp , we can also abstract the semantics of the actions using
+an idea similar to exception handling, allowing the context to
+customize the semantics of the actions simply by providing a
+different handler.
+
+Prove that the interp function interprets equivalent trees f and g to pointwise equivalent functions.
+
+Exercise File
+
+Answer
+
+let feq #a #b (f g: a -> b) = forall x. f x == g x
+let rec interp_equiv #a (f g:tree rw_action_class a)
+  : Lemma
+    (requires equiv f g)
+    (ensures feq (interp f) (interp g))
+  = match f, g with
+    | Return _, Return _ -> ()
+    | DoThen act i kf, DoThen _ _ kg ->
+      introduce forall o. feq (interp (kf o)) (interp (kg o))
+      with interp_equiv (kf o) (kg o)
+
+
+Instead of proving every time that a function like interp produces
+equivalent results when applied to equivalent trees, using functional
+extensionality, we can prove that equivalent trees are actually
+provably equal, i.e., equiv x y ==> x == y .
+
+This is a little technical, since although functional extensionality
+is a theorem in F*, it is only true of η -expanded functions.
+
+Try to use FStar.FunctionalExtensionality.fsti to adapt the
+definitions shown above so that we can prove the lemma equiv x y ==> x == y .
+
+Answer
+
+module Part2.FreeFunExt
+open FStar.Classical.Sugar
+module F = FStar.FunctionalExtensionality
+open FStar.FunctionalExtensionality
+
+noeq
+type action_class = {
+  t : Type;
+  input_of : t -> Type;
+  output_of : t -> Type;
+}
+
+
+noeq
+type tree (acts:action_class) (a:Type) =
+  | Return : x:a -> tree acts a
+  | DoThen : act:acts.t ->
+             input:acts.input_of act ->
+             //We have to restrict continuations to be eta expanded
+             //that what `^->` does. Its defined in FStar.FunctionalExtensionality
+             continue:(acts.output_of act ^-> tree acts a) ->
+             tree acts a
+
+let return #a #acts (x:a)
+  : tree acts a
+  = Return x
+
+let rec bind #acts #a #b (f: tree acts a) (g: a -> tree acts b)
+  : tree acts b
+  = match f with
+    | Return x -> g x
+    | DoThen act i k ->
+      //Now, we have to ensure that continuations are instances of
+      //F.( ^-> )
+      DoThen act i (F.on _ (fun x -> bind (k x) g))
+
+let rec equiv #acts #a (x y: tree acts a) =
+  match x, y with 
+  | Return vx, Return vy -> vx == vy
+  | DoThen actx ix kx, DoThen acty iy ky ->
+    actx == acty /\
+    ix == iy /\
+    (forall o. equiv (kx o) (ky o))
+  | _ -> False
+
+let rec equiv_refl #acts #a (x:tree acts a) 
+  : Lemma (equiv x x)
+  = match x with
+    | Return v -> ()
+    | DoThen act i k -> 
+      introduce forall o. equiv (k o) (k o)
+      with (equiv_refl (k o))
+
+let rec equiv_sym #acts #a (x y:tree acts a) 
+  : Lemma 
+    (requires equiv x y)
+    (ensures equiv y x)
+  = match x, y with
+    | Return _, Return _ -> ()
+    | DoThen act i kx, DoThen _ _ ky -> 
+      introduce forall o. equiv (ky o) (kx o)
+      with equiv_sym (kx o) (ky o)
+
+let rec equiv_trans #acts #a (x y z: tree acts a)
+  : Lemma 
+    (requires equiv x y /\ equiv y z)
+    (ensures equiv x z)
+  = match x, y, z with
+    | Return _, _, _ -> ()
+    | DoThen act i kx, DoThen _ _ ky, DoThen _ _ kz ->
+      introduce forall o. equiv (kx o) (kz o)
+      with equiv_trans (kx o) (ky o) (kz o)
+
+// THIS IS THE MAIN LEMMA OF THE EXERCISE
+let rec equiv_is_equal #acts #a (x y: tree acts a)
+  : Lemma
+    (requires equiv x y)
+    (ensures x == y)
+  = match x, y with
+    | Return _, Return _ -> ()
+    | DoThen act i kx, DoThen _ _ ky ->
+      introduce forall o. kx o == ky o
+      with equiv_is_equal (kx o) (ky o);
+      F.extensionality _ _ kx ky
+
+let right_identity #acts #a #b (x:a) (g:a -> tree acts b)
+  : Lemma (bind (return x) g `equiv` g x)
+  = equiv_refl (g x)
+
+let rec left_identity #acts #a (f:tree acts a)
+  : Lemma (bind f return `equiv` f)
+  = match f with
+    | Return _ -> ()
+    | DoThen act i k ->
+      introduce forall o. bind (k o) return `equiv` (k o)
+      with left_identity (k o)
+
+let rec assoc #acts #a #b #c 
+              (f1: tree acts a)
+              (f2: a -> tree acts b)
+              (f3: b -> tree acts c)
+  : Lemma (bind f1 (fun x -> bind (f2 x) f3) `equiv`
+           bind (bind f1 f2) f3)
+  = match f1 with
+    | Return v -> 
+      right_identity v f2;
+      right_identity v (fun x -> bind (f2 x) f3)
+    | DoThen act i k ->
+      introduce forall o. bind (k o) (fun x -> bind (f2 x) f3) `equiv`
+                     bind (bind (k o) f2) f3
+      with assoc (k o) f2 f3
+
+type rw =
+  | Read
+  | Write
+
+let input_of : rw -> Type =
+  fun a ->
+    match a with
+    | Read -> unit
+    | Write -> int
+
+let output_of : rw -> Type =
+  fun a ->
+    match a with
+    | Read -> int
+    | Write -> unit
+
+let rw_action_class = { t = rw; input_of ; output_of }
+
+//Here again the continuation has to be F.( ^-> )
+let read : tree rw_action_class int = DoThen Read () (F.on _ Return) 
+let write (x:int) : tree rw_action_class unit = DoThen Write x (F.on _ Return)
+let read_and_increment 
+  : tree rw_action_class int
+  = x <-- read ;
+    write (x + 1);;
+    return x
+
+let st a = int -> a & int
+let rec interp #a (f: tree rw_action_class a)
+  : st a 
+  = fun s0 -> 
+     match f with
+     | Return x -> x, s0
+     | DoThen Read i k -> 
+       interp (k s0) s0
+     | DoThen Write s1 k -> 
+       interp (k ()) s1
+
+// And now since equivalent trees and equal, lemmas such as this
+// become trivial
+let interp_equiv #a (f g:tree rw_action_class a)
+  : Lemma
+    (requires equiv f g)
+    (ensures feq (interp f) (interp g))
+  = equiv_is_equal f g
+
+
+As a final bit, we show that representing computations as trees is not
+just useful from a perspective of genericity and code re-use.
+Computation trees expose the structure of a computation in a way that
+allows us to manipulate it, e.g., interpreting actions in an
+alternative semantics.
+
+In this section, we enhance our computation trees to support
+non-deterministic choice, i.e., given pair of computations l, r:tree acts a , we can non-deterministically choose to evaluate l or r . With this capability, we can also express some models of
+concurrency, e.g., a semantics that interleaves imperative actions
+from several threads.
+
+Let’s start by enhancing our tree type to now include an node Or l r , to represent non-deterministic choice between l and r .
+
+noeq
+type tree (acts:action_class) (a:Type) =
+  | Return : x:a -> tree acts a
+  | DoThen : act:acts.t ->
+             input:acts.input_of act ->
+             continue: (acts.output_of act -> tree acts a) ->
+             tree acts a
+  | Or :  tree acts a -> tree acts a -> tree acts a
+
+
+As before, we can define return and bind , this time in bind we sequence g after both choices in Or .
+
+let return #acts #a (x:a)
+  : tree acts a
+  = Return x
+
+let rec bind #acts #a #b (f: tree acts a) (g: a -> tree acts b)
+  : tree acts b
+  = match f with
+    | Return x -> g x
+    | DoThen act i k ->
+      DoThen act i (fun x -> bind (k x) g)
+    | Or m0 m1 -> Or (bind m0 g) (bind m1 g)
+
+
+What’s more interesting is that, in addition to sequential
+composition, we can also define parallel composition of a pair of
+computations using par f g , as shown below.
+
+let rec l_par #acts #a #b (f:tree acts a) (g:tree acts b)
+  : tree acts (a & b)
+  = match f with
+    | Return v -> x <-- g; return (v, x)
+    | DoThen a i k ->
+      DoThen a i (fun x -> r_par (k x) g)
+    | Or m0 m1 -> Or (l_par m0 g) (l_par m1 g)
+
+and r_par #acts #a #b (f:tree acts a) (g: tree acts b)
+  : tree acts (a & b)
+  = match g with
+    | Return v -> x <-- f; return (x, v)
+    | DoThen a i k ->
+      DoThen a i (fun x -> l_par f (k x))
+    | Or m0 m1 -> Or (r_par f m0) (r_par f m1)
+
+let par #acts #a #b (f: tree acts a) (g: tree acts b)
+  : tree acts (a & b)
+  = Or (l_par f g) (r_par f g)
+
+
+There’s quite a lot going on here, so let’s break it down a bit:
+
+- The functions l_par f g and r_par f g are mutually
+recursive and define an interleaving semantics of the actions in f and g .
+
+- l_par f g is left-biased: picking an action from f to
+execute first (if any are left); while r_par f g is
+right-biased, picking an action from g to execute first.
+
+- Consider the DoThen case in l_par : if picks the head
+action a from f and the recurses in the continuation with r_par (k x) g , to prefer executing first an action from g rather than k x . The DoThen case of r_par is
+symmetric.
+
+- For l_par , in the non-deterministic choice case ( Or ), we
+interleave either choice of f with g , and r_par is
+symmetric.
+
+- Finally, we define parallel composition par f g as the
+non-deterministic choice of either the left-biased or right-biased
+interleaving of the actions of f and g . This fixes the
+semantics of parallel composition to a round-robin scheduling of
+the actions between the threads, but one could imagine
+implementing other kinds of schedulers too.
+
+As before, we can now instantiate our tree with read/write actions and
+write some simple programs, including par_inc , a computation that
+tries to increment the counter twice in parallel.
+
+let read : tree rw_actions int = DoThen Read () Return
+let write (x:int) : tree rw_actions unit = DoThen Write x Return
+let inc
+  : tree rw_actions unit
+  = x <-- read ;
+    write (x + 1)
+let par_inc = par inc inc 
+
+
+However, there’s trouble ahead—because of the interleaving
+semantics, we don’t actually increment the state twice.
+
+To check, let’s define an interpretation function to run our
+computations. Since we need to resolve the non-deterministic choice in
+the Or nodes, we’ll parameterize our intepreter by a source of
+“randomness”, an infinite stream of booleans.
+
+let randomness = nat -> bool
+let par_st a = randomness -> pos:nat -> s0:int -> (a & int & nat)
+let rec interp #a (f:tree rw_actions a) 
+  : par_st a 
+  = fun rand pos s0 ->
+      match f with
+      | Return x -> x, s0, pos
+      | DoThen Read _ k -> interp (k s0) rand pos s0
+      | DoThen Write s1 k -> interp (k ()) rand pos s1      
+      | Or l r -> 
+        if rand pos
+        then interp l rand (pos + 1) s0
+        else interp r rand (pos + 1) s0
+let st a = int -> a & int
+let interpret #a (f:tree rw_actions a) 
+  : st a    
+  = fun s0 -> 
+      let x, s, _ = interp f (fun n -> n % 2 = 0) 0 s0 in 
+      x, s
+
+
+This interpreter is very similar to our prior interpreter, except in
+the Or case, we read a boolean from rand , our randomness
+stream, and choose the left- or right-branch accordingly.
+
+We can run our program on this interpreter and check what it
+returns. One way to do this is to make use of F*’s normalizer, the
+abstract machine that F* uses to reduce computations during
+type-checking. The assert_norm p feature used below instructs F*
+to symbolically reduce the term p as much as possible and then
+check that the result is equivalent to True .
+
+Note
+
+F*’s emacs mode fstar-mode.el provides some utilites to allow
+reducing terms of F*’s abstract machine and showing the results to
+the user. F*’s tactics also also allow evaluating terms and viewing
+the results—we leave further discussion of these features to a
+future chapter.
+
+let test_prog = assert_norm (forall x. snd (interpret par_inc x) == x + 1)
+
+
+In this case, we ask F* to interpret par_inc on the interpreter we
+just defined. And, indeed, F* confirms that in the final state, we
+have incremented the state only once. Due to the round-robin
+scheduling of actions, the interpreter has executed both the reads
+before both the writes, making one of the reads and one of the writes
+redundant.
+
+Define an action class that include an increment operation, in
+addition to reads and writes. Adapt the interpreter shown above to
+work with this action class and prove (using assert_norm ) that a
+program that contains two parallel atomic increments increments the
+state twice.
+
+Exercise File
+
+Answer
+
+type rwi =
+  | R
+  | W
+  | Inc
+  
+let input_of_rwi : rwi -> Type =
+  fun a ->
+    match a with
+    | R -> unit
+    | W -> int
+    | Inc -> unit
+
+let output_of_rwi : rwi -> Type =
+  fun a ->
+    match a with
+    | R -> int
+    | W -> unit
+    | Inc -> unit
+
+let rwi_actions = { t = rwi; input_of=input_of_rwi ; output_of=output_of_rwi }
+
+let atomic_inc : tree rwi_actions unit = DoThen Inc () Return
+
+let rec interp_rwi #a (f:tree rwi_actions a) 
+  : par_st a 
+  = fun tape pos s0 ->
+      match f with
+      | Return x -> x, s0, pos
+      | DoThen R _ k -> interp_rwi (k s0) tape pos s0
+      | DoThen W s1 k -> interp_rwi (k ()) tape pos s1      
+      | DoThen Inc () k -> interp_rwi (k ()) tape pos (s0 + 1)            
+      | Or l r -> 
+        let b = tape pos in
+        if b
+        then interp_rwi l tape (pos + 1) s0
+        else interp_rwi r tape (pos + 1) s0
+let interpret_rwi #a (f:tree rwi_actions a) 
+  : st a    
+  = fun s0 -> 
+      let x, s, _ = interp_rwi f (fun n -> n % 2 = 0) 0 s0 in 
+      x, s
+
+let par_atomic_inc = par atomic_inc atomic_inc
+let test_par_atomic_inc = assert_norm (forall x. snd (interpret_rwi par_atomic_inc x) == x + 2)
+
+
+Writing correct programs with side-effects is hard, particularly when
+those effects include features like mutable state and concurrency!
+
+What we’ve seen here is that although we’ve been able to model the
+semantics of these programs, proving that they work correctly is
+non-trivial. Further, while we have defined interpreters for our
+programs, these interpreters are far from efficient. In practice, one
+usually resorts to things like shared-memory concurrency to gain
+performance and our interpreters, though mathematically precise, are
+horribly slow.
+
+Addressing these two topics is the main purpose of F*’s user-defined
+effect system, a big part of the language which we’ll cover in a
+subsequent section. The effect system aims to address two main needs:
+
+- Proofs of effectful programs: The effect system enables developing
+effectful programs coupled with program logics that enable
+specifying and proving program properties. We’ll learn about many
+different kinds of logics that F* libraries provide, ranging from
+classical Floyd-Hoare logics for sequential programs, relational
+logics for program equivalence, weakest precondition calculi, and
+separation logics for concurrent and distributed programs.
+
+- Effect abstraction: Although programs can be specified and proven
+against a clean mathematical semantics, for efficient execution,
+F* provides mechanisms to hide the representation of an effect so
+that effectful programs can be compiled efficiently to run with
+native support for effects like state, exceptions, concurrency,
+and IO.
+
+© Copyright 2020, Microsoft Research.
