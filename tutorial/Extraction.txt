@@ -1,0 +1,523 @@
+- Extraction
+
+Pulse programs can be extracted to OCaml, C, and Rust. We illustrate the extraction capabilities
+with the help of the Boyer-Moore majority vote algorithm implemented in Pulse.
+
+The algorithm finds majority vote in an array of votes in linear time
+(2n comparisons, where n is the length of the array) and constant extra memory.
+
+We implement the algorithm in Pulse with the following specification:
+
+let count (#a:eqtype) (x:a) (s:Seq.seq a) : GTot nat = Seq.count x s
+
+noextract
+let has_majority_in (#a:eqtype) (x:a) (s:Seq.seq a) = Seq.length s < 2 * count x s
+
+noextract
+let no_majority (#a:eqtype) (s:Seq.seq a) = forall (x:a). ~(x `has_majority_in` s)
+
+```pulse
+fn majority
+  (#[@@@ Rust_generics_bounds ["Copy"; "PartialEq"]] a:eqtype)
+  #p (#s:G.erased _) (votes:array a) (len:SZ.t { SZ.v len == Seq.length s })
+  requires pts_to votes #p s ** pure (0 < SZ.v len /\ SZ.fits (2 * SZ.v len))
+  returns x:option a
+  ensures pts_to votes #p s **
+          pure ((x == None ==> no_majority s) /\ (Some? x ==> (Some?.v x) `has_majority_in` s))
+
+
+The precondition SZ.fits (2 * SZ.v len) ensures safe arithmetic when counting
+for majority.
+
+The algorithm consists of two phases. The first phase, called the pairing phase,
+pairs off disagreeing votes (cancels them) until the remaining votes are all same.
+The main idea of the algorithm is to do this pairing with n comparisons. After the
+pairing phase, the remaining vote must be the majority, if the majority exists .
+The second phase, called the counting phase, checks if the remaining vote is indeed
+in majority with n more comparisons.
+
+For the first phase, the algorithm maintains three auxiliary variables, i for the
+loop counter, cand the current majority candidate, and a count k . It visits the
+votes in a loop, where for the i-th element of the array, if k = 0 , the algorithm assigns the i-th vote as the new
+majority candidate and assigns k = 1 . Otherwise, if the i-th vote is same as cand , it increments k by one, otherwise it decrements k by one.
+
+The second phase then is another while loop that counts the number of votes
+for the majority candidate from the first phase.
+
+{
+  let mut i = 1sz;
+  let mut k = 1sz;
+  let votes_0 = votes.(0sz);
+  let mut cand = votes_0;
+  assert (pure (count_until votes_0 s 1 == 1));
+  // while loop for phase 1
+  while (
+    let vi = !i;
+    (vi <^ len)
+  )
+  invariant b.
+    pts_to votes #p s **
+    (exists* vi vk vcand.
+       R.pts_to i vi       **
+       R.pts_to k vk       **
+       R.pts_to cand vcand **
+       pure (
+         v vi <= Seq.length s /\
+         // v is a spec function that returns nat representation of an FStar.SizeT
+         0 <= v vk /\ v vk <= count_until vcand s (v vi) /\
+         // constraint for the current candidate,
+         2 * (count_until vcand s (v vi) - v vk) <= v vi - v vk /\
+         // constraint for the rest of the candidates
+         (forall (vcand':a). vcand' =!= vcand ==> 2 * count_until vcand' s (v vi) <= v vi - v vk) /\
+         b == (v vi < v len)))
+  {
+    let vi = !i;
+    let vk = !k;
+    let vcand = !cand;
+    let votes_i = votes.(vi);
+    // count_until_next is a lemma that captures the behavior of
+    // count when the sequence index is incremented
+    count_until_next vcand s (SZ.v vi);
+    if (vk = 0sz) {
+      cand := votes_i;
+      k := 1sz;
+      i := vi +^ 1sz
+    } else if (votes_i = vcand) {
+      k := vk +^ 1sz;
+      i := vi +^ 1sz
+    } else {
+      k := vk -^ 1sz;
+      i := vi +^ 1sz
+    }
+  };
+  let vk = !k;
+  let vcand = !cand;
+  // a couple of optimizations
+  if (vk = 0sz) {
+    None #a
+  } else if (len <^ 2sz *^ vk) {
+    Some vcand
+  } else {
+    i := 0sz;
+    k := 0sz;
+    // while loop for phase 2
+    while (
+      let vi = !i;
+      (vi <^ len)
+    )
+    invariant b.
+      pts_to votes #p s **
+      (exists* vi vk.
+         R.pts_to i vi **
+         R.pts_to k vk **
+         pure (SZ.v vi <= Seq.length s /\
+               SZ.v vk == count_until vcand s (SZ.v vi) /\
+               b == (SZ.v vi < SZ.v len)))
+    {
+      let vi = !i;
+      let vk = !k;
+      let votes_i = votes.(vi);
+      count_until_next vcand s (SZ.v vi);
+      if (votes_i = vcand) {
+        k := vk +^ 1sz;
+        i := vi +^ 1sz
+      } else {
+        i := vi +^ 1sz
+      }
+    };
+
+    let vk = !k;
+    if (len <^ 2sz *^ vk) {
+      Some vcand
+    } else {
+      None #a
+    }
+  }
+}
+
+
+The loop invariant for the first phase specifies majority constraints within the
+prefix of the array that the loop has visited so far. The second phase loop invariant
+is a simple counting invariant.
+
+Pulse automatically proves the program, with an hint for the behavior of the count function as we increment the loop counter, the following count_until_next lemma
+captures the behavior, and we invoke the lemma in both the while loops:
+
+let count_until_next (#a:eqtype) (x:a) (s:Seq.seq a) (j:nat { j < Seq.length s })
+  : Lemma
+      (ensures count_until (Seq.index s j) s (j + 1) == count_until (Seq.index s j) s j + 1 /\
+               (forall (y:a). y =!= Seq.index s j ==> count_until y s (j + 1) == count_until y s j))
+   
+
+
+Pulse toolchain is accompanied with a tool to extract Pulse programs to Rust.
+The extraction pipeline maps the Pulse syntactic constructs such as let mut , while , if-then-else , etc. to corresponding Rust constructs. Further,
+Pulse libraries are mapped to their Rust counterparts, e.g. Pulse.Lib.Vec to std::vec , Pulse.Lib.Array to Rust slices etc.
+
+To extract a Pulse file to Rust, we first invoke the F* extraction pipeline with
+the command line option --codegen Extension . This emits a .ast file containing
+an internal AST representation of the file. We then invoke the Rust extraction tool
+that takes as input the .ast files and outputs the extracted Rust code (by-default
+the output is written to stdout , if an -o <file> option is provided to the tool,
+the output is written to file ). For example, the first command produces the .ast file from PulseTutorial.Algorithms.fst (which contains the Boyer-Moore algorithm implementation),
+and then the second command extracts the Rust code to voting.rs . (These commands are run in the pulse root directory, change the location of main.exe according to your setup.)
+
+$ fstar.exe --include lib/pulse/ --include lib/pulse/lib
+  --include share/pulse/examples/by-example/ --include share/pulse/examples/_output/cache/
+  --load_cmxs pulse  --odir . PulseTutorial.Algorithms.fst
+  --extract 'PulseTutorial.Algorithms' --codegen Extension
+
+$ ./pulse2rust/main.exe PulseTutorial_Algorithms.ast -o voting.rs
+
+
+The output Rust code is as shown below:
+
+pub fn majority<A: Clone + Copy + PartialEq>(
+    p: (),
+    s: (),
+    votes: &mut [A],
+    len: usize,
+) -> std::option::Option<A> {
+    let mut i = 1;
+    let mut k = 1;
+    let votes_0 = votes[0];
+    let mut cand = votes_0;
+    while {
+        let vi = i;
+        vi < len
+    } {
+        let vi = i;
+        let vk = k;
+        let vcand = cand;
+        let votes_i = votes[vi];
+        if vk == 0 {
+            cand = votes_i;
+            k = 1;
+            i = vi + 1
+        } else if votes_i == vcand {
+            k = vk + 1;
+            i = vi + 1
+        } else {
+            k = vk - 1;
+            i = vi + 1
+        };
+    }
+    let vk = k;
+    let vcand = cand;
+    let _bind_c = if vk == 0 {
+        None
+    } else if len < 2 * vk {
+        Some(vcand)
+    } else {
+        i = 0;
+        k = 0;
+        while {
+            let vi = i;
+            vi < len
+        } {
+            let vi = i;
+            let vk1 = k;
+            let votes_i = votes[vi];
+            if votes_i == vcand {
+                k = vk1 + 1;
+                i = vi + 1
+            } else {
+                i = vi + 1
+            };
+        }
+        let vk1 = k;
+        if len < 2 * vk1 {
+            Some(vcand)
+        } else {
+            None
+        }
+    };
+    let cand1 = _bind_c;
+    let k1 = cand1;
+    let i1 = k1;
+    i1
+}
+
+
+We can test it by adding the following in voting.rs and running the tests
+(using cargo test , it requires a Cargo.toml file, we provide an example file
+in the repo that can be used):
+
+#[derive(Copy, Clone, PartialEq, Debug)]
+enum Candidate {
+    A,
+    B,
+    C,
+}
+
+#[test]
+fn test() {
+    let mut votes = [0, 1, 0, 0, 0, 1];
+    let winner = majority((), (), &mut votes, 6);
+    assert_eq!(winner, Some(0));
+
+    let mut str_votes = ["a", "b", "a", "a", "c"];
+    let str_winner = majority((), (), &mut str_votes, 5);
+    assert_eq!(str_winner, Some("a"));
+
+    let mut cand_votes = [Candidate::A, Candidate::B, Candidate::C, Candidate::B];
+    let cand_winner = majority((), (), &mut cand_votes, 4);
+    assert_eq!(cand_winner, None);
+}
+
+
+A few notes about the extracted Rust code:
+
+- The Pulse function and the Rust function are generic in the type of the votes. In Rust,
+the extracted code required the type argument to implement the Clone , Copy , and PartialEq traits. Currently we hardcode these traits. We plan to specify these traits
+in Pulse through attribute mechanism
+
+- The ghost arguments p and s appear in the Rust code as unit arguments, we plan
+to make it so that these arguments are completely erased.
+
+- Whereas majority needs only read permission for the votes array in the Pulse
+signature, the extracted Rust code specifies the argument as &mut . The Rust extraction
+pipeline currently passes all the references as mut , we plan to make
+it more precise by taking into account the permissions from the Pulse signature.
+
+Pulse programs can also be extracted to C. The extraction pipeline is based on the Karamel tool. The process to extract Pulse
+programs to C is similar to that of extracting Low* to C, described in this tutorial . In summary, we first generate .krml files from using the F* extraction command line option --codegen krml , and then
+run the Karamel tool on those files.
+
+One catch with extracting our Boyer-Moore implementation to C is that due to the lack
+of support of polymorphism in C, Karamel monomorphizes polymorphic functions based on
+their uses. So, we write a monomorphic version of the majority function for u32 ,
+that internally calls the polymorphic majority function:
+
+fn majority_mono #p (#s:G.erased _) (votes:array u32_t) (len:SZ.t { SZ.v len == Seq.length s })
+  requires pts_to votes #p s ** pure (0 < SZ.v len /\ SZ.fits (2 * SZ.v len))
+  returns x:option u32_t
+  ensures pts_to votes #p s **
+          pure ((x == None ==> no_majority s) /\ (Some? x ==> (Some?.v x) `has_majority_in` s))
+{
+  majority #u32_t #p #s votes len
+}
+
+
+Then we extract it to C as follows (the commands are run in the pulse root directory as before):
+
+$ fstar.exe --include lib/pulse/ --include lib/pulse/lib
+  --include share/pulse/examples/by-example/ --include share/pulse/examples/_output/cache/
+  --load_cmxs pulse  --odir . PulseTutorial.Algorithms.fst
+  --extract 'FStar.Pervasives.Native PulseTutorial.Algorithms' --codegen krml
+
+$ ../karamel/krml -skip-compilation out.krml
+
+
+This produces PulseTutorial_Algorithms.h and PulseTutorial_Algorithms.c files, with the following
+implementation of majority :
+
+FStar_Pervasives_Native_option__uint32_t
+PulseTutorial_Algorithms_majority__uint32_t(uint32_t *votes, size_t len)
+{
+  size_t i = (size_t)1U;
+  size_t k = (size_t)1U;
+  uint32_t votes_0 = votes[0U];
+  uint32_t cand = votes_0;
+  size_t vi0 = i;
+  bool cond = vi0 < len;
+  while (cond)
+  {
+    size_t vi = i;
+    size_t vk = k;
+    uint32_t vcand = cand;
+    uint32_t votes_i = votes[vi];
+    if (vk == (size_t)0U)
+    {
+      cand = votes_i;
+      k = (size_t)1U;
+      i = vi + (size_t)1U;
+    }
+    else if (votes_i == vcand)
+    {
+      k = vk + (size_t)1U;
+      i = vi + (size_t)1U;
+    }
+    else
+    {
+      k = vk - (size_t)1U;
+      i = vi + (size_t)1U;
+    }
+    size_t vi0 = i;
+    cond = vi0 < len;
+  }
+  size_t vk = k;
+  uint32_t vcand = cand;
+  if (vk == (size_t)0U)
+    return ((FStar_Pervasives_Native_option__uint32_t){ .tag = FStar_Pervasives_Native_None });
+  else if (len < (size_t)2U * vk)
+    return
+      (
+        (FStar_Pervasives_Native_option__uint32_t){
+          .tag = FStar_Pervasives_Native_Some,
+          .v = vcand
+        }
+      );
+  else
+  {
+    i = (size_t)0U;
+    k = (size_t)0U;
+    size_t vi0 = i;
+    bool cond = vi0 < len;
+    while (cond)
+    {
+      size_t vi = i;
+      size_t vk1 = k;
+      uint32_t votes_i = votes[vi];
+      if (votes_i == vcand)
+      {
+        k = vk1 + (size_t)1U;
+        i = vi + (size_t)1U;
+      }
+      else
+        i = vi + (size_t)1U;
+      size_t vi0 = i;
+      cond = vi0 < len;
+    }
+    size_t vk1 = k;
+    if (len < (size_t)2U * vk1)
+      return
+        (
+          (FStar_Pervasives_Native_option__uint32_t){
+            .tag = FStar_Pervasives_Native_Some,
+            .v = vcand
+          }
+        );
+    else
+      return ((FStar_Pervasives_Native_option__uint32_t){ .tag = FStar_Pervasives_Native_None });
+  }
+}
+
+
+We can now test it with a client like:
+
+#include "PulseTutorial_Algorithms.h"
+
+int main(int argc, char **argv) {
+  uint32_t votes[4] = {1, 1, 0, 1};
+  FStar_Pervasives_Native_option__uint32_t result = PulseTutorial_Algorithms_majority__uint32_t(votes, 4);
+  if (result.tag == FStar_Pervasives_Native_None) {
+    printf("No majority\n");
+  } else {
+    printf("Majority: %d\n", result.v);
+  }
+  return 0;
+}
+
+
+$ gcc PulseTutorial_Algorithms.c PulseTutorial_Algorithms_Client.c -I ../karamel/include/
+  -I ../karamel/krmllib/c -I ../karamel/krmllib/dist/minimal/
+
+$ ./a.out
+Majority: 1
+
+$
+
+
+As with all F* programs, Pulse programs can be extracted to OCaml. One caveat
+with using the OCaml backend for Pulse programs is that the explicit memory
+management from Pulse programs does not carry over to OCaml. For example, the
+extracted OCaml programs rely on the OCaml garbage collector for reclaiming unused
+heap memory, let mut variables are allocated on the heap, etc.
+
+For the Boyer-Moore example, we can extract the program to OCaml as follows:
+
+$ fstar.exe --include lib/pulse/ --include lib/pulse/lib
+  --include share/pulse/examples/by-example/ --include share/pulse/examples/_output/cache/
+  --load_cmxs pulse  --odir . PulseTutorial.Algorithms.fst
+  --extract 'PulseTutorial.Algorithms' --codegen OCaml
+
+
+and the extracted majority function looks like:
+
+let majority p s votes len =
+  let i = Pulse_Lib_Reference.alloc (FStar_SizeT.uint_to_t Prims.int_one) in
+  let k = Pulse_Lib_Reference.alloc (FStar_SizeT.uint_to_t Prims.int_one) in
+  let votes_0 =
+    Pulse_Lib_Array_Core.op_Array_Access votes Stdint.Uint64.zero () () in
+  let cand = Pulse_Lib_Reference.alloc votes_0 in
+  let uu___ =
+    Pulse_Lib_Core.while_
+      (fun _ ->
+         let vi = Pulse_Lib_Reference.op_Bang i () () in
+         FStar_SizeT.lt vi len)
+      (fun _ ->
+         let vi = Pulse_Lib_Reference.op_Bang i () () in
+         let vk = Pulse_Lib_Reference.op_Bang k () () in
+         let vcand = Pulse_Lib_Reference.op_Bang cand () () in
+         let votes_i = Pulse_Lib_Array_Core.op_Array_Access votes vi () () in
+         let uu___ = () in
+         let _bind_c =
+           if vk = Stdint.Uint64.zero
+           then
+             let uu___1 = Pulse_Lib_Reference.op_Colon_Equals cand votes_i () in
+             let uu___2 =
+               Pulse_Lib_Reference.op_Colon_Equals k Stdint.Uint64.one () in
+             Pulse_Lib_Reference.op_Colon_Equals i
+               (FStar_SizeT.add vi Stdint.Uint64.one) ()
+           else
+             if votes_i = vcand
+             then
+               (let uu___1 =
+                  Pulse_Lib_Reference.op_Colon_Equals k
+                    (FStar_SizeT.add vk Stdint.Uint64.one) () in
+                Pulse_Lib_Reference.op_Colon_Equals i
+                  (FStar_SizeT.add vi Stdint.Uint64.one) ())
+             else
+               (let uu___1 =
+                  Pulse_Lib_Reference.op_Colon_Equals k
+                    (FStar_SizeT.sub vk Stdint.Uint64.one) () in
+                Pulse_Lib_Reference.op_Colon_Equals i
+                  (FStar_SizeT.add vi Stdint.Uint64.one) ()) in
+         let _while_b = () in ()) in
+  let vk = Pulse_Lib_Reference.op_Bang k () () in
+  let vcand = Pulse_Lib_Reference.op_Bang cand () () in
+  let _bind_c =
+    if vk = Stdint.Uint64.zero
+    then FStar_Pervasives_Native.None
+    else
+      if FStar_SizeT.lt len (FStar_SizeT.mul (Stdint.Uint64.of_int (2)) vk)
+      then FStar_Pervasives_Native.Some vcand
+      else
+        (let uu___1 =
+           Pulse_Lib_Reference.op_Colon_Equals i Stdint.Uint64.zero () in
+         let uu___2 =
+           Pulse_Lib_Reference.op_Colon_Equals k Stdint.Uint64.zero () in
+         let uu___3 =
+           Pulse_Lib_Core.while_
+             (fun _ ->
+                let vi = Pulse_Lib_Reference.op_Bang i () () in
+                FStar_SizeT.lt vi len)
+             (fun _ ->
+                let vi = Pulse_Lib_Reference.op_Bang i () () in
+                let vk1 = Pulse_Lib_Reference.op_Bang k () () in
+                let votes_i =
+                  Pulse_Lib_Array_Core.op_Array_Access votes vi () () in
+                let uu___3 = () in
+                let _bind_c =
+                  if votes_i = vcand
+                  then
+                    let uu___4 =
+                      Pulse_Lib_Reference.op_Colon_Equals k
+                        (FStar_SizeT.add vk1 Stdint.Uint64.one) () in
+                    Pulse_Lib_Reference.op_Colon_Equals i
+                      (FStar_SizeT.add vi Stdint.Uint64.one) ()
+                  else
+                    Pulse_Lib_Reference.op_Colon_Equals i
+                      (FStar_SizeT.add vi Stdint.Uint64.one) () in
+                let _while_b = () in ()) in
+         let vk1 = Pulse_Lib_Reference.op_Bang k () () in
+         if
+           FStar_SizeT.lt len
+             (FStar_SizeT.mul (Stdint.Uint64.of_int (2)) vk1)
+         then FStar_Pervasives_Native.Some vcand
+         else FStar_Pervasives_Native.None) in
+  let cand1 = _bind_c in let k1 = cand1 in let i1 = k1 in i1
+
+
+© Copyright 2020, Microsoft Research.

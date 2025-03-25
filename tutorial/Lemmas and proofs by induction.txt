@@ -1,0 +1,568 @@
+- Lemmas and proofs by induction
+
+Let’s say you wrote the factorial function and gave it the type nat -> nat . Later, you care about some other property about factorial , e.g., that if x > 2 then factorial x > x . One
+option is to revise the type you wrote for factorial and get F*
+to reprove that it has this type. But this isn’t always feasible. What
+if you also wanted to prove that if x > 3 then factorial x > 2 * x . Clearly, polluting the type of factorial with all these
+properties that you may or may not care about is impractical.
+
+You could write assertions to ask F* to check these properties, e.g.,
+
+let _ = assert (forall (x:nat). x > 2 ==> factorial x > 2)
+
+
+But, F* complains saying that it couldn’t prove this fact. That’s not
+because the fact isn’t true—recall, checking the validity of
+assertions in F* is undecidable. So, there are facts that are true
+that F* may not be able to prove, at least not without some help.
+
+In this case, proving this property about factorial requires a
+proof by induction. F* and Z3 cannot do proofs by induction
+automatically—you will have to help F* here by writing a lemma .
+
+A lemma is a function in F* that always returns the ():unit value. However, the type of lemma carries useful information about
+which facts are provable.
+
+Here’s our first lemma:
+
+let rec factorial_is_positive (x:nat)
+  : u:unit{factorial x > 0}
+  = if x = 0 then ()
+    else factorial_is_positive (x - 1)
+
+
+There’s a lot of information condensed in that definition. Let’s spell
+it out in detail:
+
+- factorial_is_positive is a recursive function with a parameter x:nat
+
+- The return type of factorial_is_positive is a refinement of
+unit, namely u:unit{factorial x > 0} .  That says that the
+function always returns () , but, additionally, when factorial_is_positive x returns (which it always does, since it
+is a total function) it is safe to conclude that factorial x > 0 .
+
+- The next three lines prove the lemma using a proof by induction on x . The basic concept here is that by programming total
+functions, we can write proofs about other pure expressions. We’ll
+discuss such proofs in detail in the remainder of this section.
+
+Lemmas are so common in F* that it’s convenient to have special syntax
+for them. Here’s another take at our proof by factorial x > 0
+
+let rec factorial_is_pos (x:int)
+  : Lemma (requires x >= 0)
+          (ensures factorial x > 0)
+  = if x = 0 then ()
+    else factorial_is_pos (x - 1)
+
+
+The type x:t -> Lemma (requires pre) (ensures post) is the type of
+a function
+
+- that can be called with an argument v:t
+
+- the argument must satisfies the precondition pre[v/x]
+
+- the function always returns a unit
+
+- and ensures that the postcondition post[v/x] is valid
+
+The type is equivalent to x:t{pre} -> u:unit{post} .
+
+When the precondition pre is trivial, it can be omitted. One can
+just write:
+
+Lemma (ensures post)
+
+
+or even
+
+Lemma post
+
+
+Let’s look at this lemma in detail again—why does it convince F* that factorial x > 0 ?
+
+let rec factorial_is_pos (x:int)
+  : Lemma (requires x >= 0)
+          (ensures factorial x > 0)
+  = if x = 0 then ()
+    else factorial_is_pos (x - 1)
+
+
+- It is a proof by induction on x . Proofs by induction in F* are
+represented by total recursive functions. The fact that it is total
+is extremely important—it ensures that the inductive argument is
+well-founded, i.e., that the induction hypothesis is only applied
+correctly on strictly smaller arguments.
+
+- The base case of the induction is when x=0 . In this case, F* +
+Z3 can easily prove that factorial 0 > 0 , since this just
+requires computing factorial 0 to 1 and checking 1 > 0 .
+
+- What remains is the case where x > 0 .
+
+- In the inductive case, the type of the recursively bound factorial_is_pos represents the induction hypothesis. In this
+case, its type is y:int {y < x} -> Lemma ( requires y >= 0) ( ensures factorial y > 0) In other words, the type of recursive function tells us that for all y that are smaller than that current argument x and
+non-negative , it is safe to assume that factorial y > 0 .
+
+y:int {y < x} -> Lemma (requires y >= 0) (ensures factorial y > 0)
+
+
+- By making a recursive call on x-1 , F* can conclude that factorial (x - 1) > 0 .
+
+- Finally, to prove that factorial x > 0 , the solver figures out
+that factorial x = x * factorial (x - 1) . From the recursive
+lemma invocation, we know that factorial (x - 1) > 0 , and since
+we’re in the case where x > 0 , the solver can prove that the
+product of two positive numbers must be positive.
+
+Click here for the exercise file.
+
+Try proving the following lemmas about factorial :
+
+val factorial_is_greater_than_arg (x:int)
+  : Lemma (requires x > 2)
+          (ensures factorial x > x)
+
+
+Answer
+
+let rec factorial_is_greater_than_arg (x:int)
+  : Lemma (requires x > 2)
+          (ensures factorial x > x)
+  = if x = 3 then ()
+    else factorial_is_greater_than_arg (x - 1)
+
+
+Try proving the following lemmas about fibonacci :
+
+let rec fibonacci (n:nat)
+  : nat
+  = if n <= 1
+    then 1
+    else fibonacci (n - 1) + fibonacci (n - 2)
+
+val fibonacci_greater_than_arg (n:nat{n >= 2})
+  : Lemma (fibonacci n >= n)
+
+
+Answer (Includes two proofs and detailed explanations)
+
+let rec fibonacci_greater_than_arg (n:nat{n >= 2})
+  : Lemma (fibonacci n >= n)
+  = if n <= 3 then ()
+    else (
+      fibonacci_greater_than_arg (n - 1);
+      fibonacci_greater_than_arg (n - 2)
+    )
+
+
+Let’s have a look at that proof in some detail. It’s much like the
+proof by induction we discussed in detail earlier, except now we
+have two uses of the induction hypothesis.
+
+- It’s a proof by induction on n:nat{n >= 2} , as you can tell from the let rec .
+
+- The base cases are when n = 2 and n = 3 . In both these
+cases, the solver can simply compute fibonacci n and check
+that it is greater than n .
+
+- Otherwise, in the inductive case, we have n >= 4 and the
+induction hypothesis is the type of the recursive function: m : nat { m >= 2 / \ m < n } -> Lemma ( fibonacci m >= m )
+
+m:nat{m >= 2 /\ m < n} -> Lemma (fibonacci m >= m)
+
+
+- We call the induction hypothesis twice and get: fibonacci ( n - 1 ) >= n - 1 fibonacci ( n - 2 ) >= n - 2
+
+fibonacci (n - 1) >= n - 1
+fibonacci (n - 2) >= n - 2
+
+
+- To conclude, we show: fibonacci n = // by definition fibonacci ( n - 1 ) + fibonacci ( n - 2 ) >= // from the facts above ( n - 1 ) + ( n - 2 ) = // rearrange 2 * n - 3 >= // when n >= 4 n
+
+fibonacci n = //by definition
+fibonacci (n - 1) + fibonacci (n - 2) >= //from the facts above
+(n - 1) + (n - 2) = //rearrange
+2*n - 3 >=  //when n >= 4
+n
+
+
+As you can see, once you set up the induction, the SMT solver does
+a lot of the work.
+
+Sometimes, the SMT solver can even find proofs that you might not
+write yourself. Consider this alternative proof of fibonacci n >= n .
+
+let rec fib_greater_than_arg (n:nat{n >= 2})
+  : Lemma (fibonacci n >= n)
+  = if n = 2 then ()
+    else (
+      fib_greater_than_arg (n - 1)
+    )
+
+
+This proof works with just a single use of the induction
+hypothesis. How come? Let’s look at it in detail.
+
+- It’s a proof by induction on n:nat{n >= 2} .
+
+- The base case is when n=2 . It’s easy to compute fibonacci 2 and check that it’s greater than or equal to 2.
+
+- In the inductive case, we have: n >= 3
+
+n >= 3
+
+
+- The induction hypothesis is: m : nat { m >= 2 / \ m < n } -> Lemma ( fibonacci m >= m )
+
+m:nat{m >= 2 /\ m < n} -> Lemma (fibonacci m >= m)
+
+
+- We apply the induction hypothesis to n - 1 and get fibonacci ( n - 1 ) >= n - 1
+
+fibonacci (n - 1) >= n - 1
+
+
+- We have: fibonacci n = // definition fibonacci ( n - 1 ) + fibonacci ( n - 2 ) >= // from 5 ( n - 1 ) + fibonacci ( n - 2 )
+
+fibonacci n = //definition
+fibonacci (n - 1) + fibonacci (n - 2) >= //from 5
+(n - 1) + fibonacci (n - 2)
+
+
+- So, our goal is now: ( n - 1 ) + fibonacci ( n - 2 ) >= n
+
+(n - 1) + fibonacci (n - 2) >= n
+
+
+- It suffices if we can show fibonacci (n - 2) >= 1
+
+- From (2) and the definition of fibonacci we have: fibonacci ( n - 1 ) = // definition fibonacci ( n - 2 ) + fibonacci ( n - 3 ) >= // from 5 n - 1 >= // from 3 2
+
+fibonacci (n - 1) = //definition
+fibonacci (n - 2) + fibonacci (n - 3) >= //from 5
+n - 1 >= // from 3
+2
+
+
+- Now, suppose for contradiction, that fibonacci (n - 2) = 0 . 10.1. Then, from step 9, we have fibonacci (n-3) >= 2 10.2  If n=3 , then fibonacci 0 = 1 , so we have a contradiction. 10.3  If n > 3 , then 10.3.1. fibonacci (n-2) = fibonacci (n-3) + fibonacci (n-4) , by definition 10.3.2. fibonacci (n-3) + fibonacci (n-4) >= fibonacci (n-3) , since fibonacci (n-4) : nat . 10.3.3. fibonacci (n-2) >= fibonacci (n-3) , using 10.3.1 and 10.3.2 10.3.4. fibonacci (n-2) >= 2 , using 10.1 10.3.5. But, 10.3.4 contradicts 10; so the proof is complete.
+
+You probably wouldn’t have come up with this proof yourself, and
+indeed, it took us some puzzling to figure out how the SMT solver
+was able to prove this lemma with just one use of the induction
+hypothesis. But, there you have it. All of which is to say that
+the SMT solver is quite powerful!
+
+Earlier , we saw a definition of append with the following type:
+
+val append (#a:Type) (l1 l2:list a)
+  : l:list a{length l = length l1 + length l2}
+
+
+Now, suppose we were to define app` , a version of append with a
+weaker type, as shown below.
+
+let rec app #a (l1 l2:list a)
+  : list a
+  = match l1 with
+    | [] -> l2
+    | hd :: tl -> hd :: app tl l2
+
+
+Can you prove the following lemma?
+
+val app_length (#a:Type) (l1 l2:list a)
+  : Lemma (length (app l1 l2) = length l1 + length l2)
+
+
+Answer
+
+let rec app_length #a l1 l2
+  = match l1 with
+    | [] -> ()
+    | _ :: tl -> app_length tl l2
+
+
+As the previous exercise illustrates, you can prove properties either
+by enriching the type of a function or by writing a separate lemma
+about it—we call these the ‘intrinsic’ and ‘extrinsic’ styles,
+respectively. Which style to prefer is a matter of taste and
+convenience: generally useful properties are often good candidates for
+intrinsic specification (e.g, that length returns a nat ); more
+specific properties are better stated and proven as lemmas. However,
+in some cases, as in the following example, it may be impossible to
+prove a property of a function directly in its type—you must resort
+to a lemma.
+
+let rec reverse #a (l:list a)
+  : list a
+  = match l with
+    | [] -> []
+    | hd :: tl -> append (reverse tl) [hd]
+
+
+Let’s try proving that reversing a list twice is the identity
+function.  It’s possible to specify this property in the type of reverse using a refinement type.
+
+val reverse (#a:Type) : f:(list a -> list a){forall l. l == f (f l)}
+
+
+Note
+
+A subtle point: the refinement on reverse above uses a propositional equality . That’s because equality on
+lists of arbitrary types is not decidable, e.g., consider list (int -> int) .  All the proofs below will rely on propositional
+equality.
+
+However, F* refuses to accept this as a valid type for reverse :
+proving this property requires two separate inductions, neither of
+which F* can perform automatically.
+
+Instead, one can use two lemmas to prove the property we care
+about. Here it is:
+
+(* snoc is "cons" backwards --- it adds an element to the end of a list *)
+let snoc l h = append l [h]
+
+let rec snoc_cons #a (l:list a) (h:a)
+  : Lemma (reverse (snoc l h) == h :: reverse l)
+  = match l with
+    | [] -> ()
+    | hd :: tl -> snoc_cons tl h
+
+let rec rev_involutive #a (l:list a)
+  : Lemma (reverse (reverse l) == l)
+  = match l with
+    | [] -> ()
+    | hd :: tl ->
+      // (1) [reverse (reverse tl) == tl]
+      rev_involutive tl;
+      // (2) [reverse (append (reverse tl) [hd]) == h :: reverse (reverse tl)]
+      snoc_cons (reverse tl) hd
+      // These two facts are enough for Z3 to prove the lemma:
+      //   reverse (reverse (hd :: tl))
+      //   =def= reverse (append (reverse tl) [hd])
+      //   =(2)= hd :: reverse (reverse tl)
+      //   =(1)= hd :: tl
+      //   =def= l
+
+
+In the hd :: tl case of rev_involutive we are explicitly
+applying not just the induction hypothesis but also the snoc_cons auxiliary lemma also proven there.
+
+Click here for the exercise file.
+
+Prove that reverse is injective, i.e., prove the following lemma.
+
+val rev_injective (#a:Type) (l1 l2:list a)
+  : Lemma (requires reverse l1 == reverse l2)
+          (ensures  l1 == l2)
+
+
+Answer
+
+let rec snoc_injective (#a:Type) (l1:list a) (h1:a) (l2:list a) (h2:a)
+  : Lemma (requires snoc l1 h1 == snoc l2 h2)
+          (ensures l1 == l2 /\ h1 == h2)
+  = match l1, l2 with
+    | _ :: tl1, _ :: tl2 -> snoc_injective tl1 h1 tl2 h2
+    | _ -> ()
+
+
+let rec rev_injective l1 l2 =
+  match l1,l2 with
+  | h1::t1, h2::t2 ->
+      // assert(reverse (h1::t1) = reverse (h2::t2));
+      // assert(snoc (reverse t1) h1  = snoc (reverse t2) h2);
+      snoc_injective (reverse t1) h1 (reverse t2) h2;
+      // assert(reverse t1 = reverse t2 /\ h1 = h2);
+      rev_injective t1 t2
+      // assert(t1 = t2 /\ h1::t1 = h2::t2)
+  | _, _ -> ()
+
+
+That’s quite a tedious proof, isn’t it. Here’s a simpler proof.
+
+let rev_injective_alt (#a:Type) (l1 l2:list a)
+  : Lemma (requires reverse l1 == reverse l2)
+          (ensures  l1 == l2)
+  = rev_involutive l1; rev_involutive l2
+
+
+The rev_injective_alt proof is based on the idea that every
+invertible function is injective. We’ve already proven that reverse is involutive, i.e., it is its own inverse. So, we
+invoke our lemma, once for l1 and once for l2 .  This gives
+to the SMT solver the information that reverse (reverse l1) = l1 and reverse (reverse l2) = l2 , which suffices to complete
+the proof. As usual, when structuring proofs, lemmas are your
+friends!
+
+Earlier, we saw how to implement a tail-recursive variant of reverse .
+
+let rec rev_aux #a (l1 l2:list a)
+  : Tot (list a) (decreases l2)
+  = match l2 with
+    | []     -> l1
+    | hd :: tl -> rev_aux (hd :: l1) tl
+
+let rev #a (l:list a) : list a = rev_aux [] l
+
+
+Prove the following lemma to show that it is equivalent to the
+previous non-tail-recursive implementation, i.e.,
+
+val rev_is_ok (#a:_) (l:list a) : Lemma (rev [] l == reverse l)
+
+
+Answer
+
+let rec rev_is_ok_aux #a (l1 l2:list a)
+  : Lemma (ensures (rev_aux l1 l2 == append (reverse l2) l1))
+          (decreases l2)
+  = match l2 with
+    | [] -> ()
+    | hd :: tl  -> rev_is_ok_aux (hd :: l1) tl;
+                 append_assoc (reverse tl) [hd] l1
+
+let rev_is_ok #a (l:list a)
+  : Lemma (rev l == reverse l)
+  = rev_is_ok_aux [] l;
+    append_right_unit (reverse l)
+
+
+Earlier, we saw how to implement a tail-recursive variant of fibonacci —we show it again below.
+
+let rec fib (a b n:nat)
+  : Tot nat (decreases n)
+  = match n with
+    | 0 -> a
+    | _ -> fib b (a+b) (n-1)
+
+let fib_tail (n:nat) : nat = fib 1 1 n
+
+
+Prove the following lemma to show that it is equivalent to the
+non-tail-recursive implementation, i.e.,
+
+val fib_tail_is_ok (n:nat)
+  : Lemma (fib_tail n == fibonacci n)
+
+
+Answer
+
+let rec fib_is_ok_aux (n: nat) (k: nat)
+  : Lemma (fib (fibonacci k)
+               (fibonacci (k + 1)) n == fibonacci (k + n))
+  = if n = 0 then () else fib_is_ok_aux (n - 1) (k + 1)
+
+let fib_tail_is_ok (n:nat)
+  : Lemma (fib_tail n == fibonacci n)
+  = fib_is_ok_aux n 0
+
+
+Functions are first-class values—they can be passed to other functions
+and returned as results. We’ve already seen some examples in the
+section on polymorphism . Here are some more, starting with
+the map function on lists.
+
+let rec map #a #b (f: a -> b) (l:list a)
+  : list b
+  = match l with
+    | [] -> []
+    | hd::tl -> f hd :: map f tl
+
+
+It takes a function f and a list l and it applies f to
+each element in l producing a new list. More precisely map f [v1; ...; vn] produces the list [f v1; ...; f vn] . For example:
+
+map (fun x -> x + 1) [0; 1; 2] = [1; 2; 3]
+
+
+Here’s a function called find that given a boolean function f and a list l returns the first element in l for which f holds. If no element is found find returns None .
+
+let rec find f l =
+  match l with
+  | [] -> None
+  | hd :: tl -> if f hd then Some hd else find f tl
+
+
+Prove that if find returns Some x then f x = true . Is it
+better to do this intrinsically or extrinsically? Do it both ways.
+
+Answer
+
+val find (#a:Type) (f: a -> bool) (l:list a)
+  : o:option a{ Some? o ==> f (Some?.v o)}
+
+
+let rec find_alt f l =
+  match l with
+  | [] -> None
+  | hd :: tl -> if f hd then Some hd else find_alt f tl
+
+let rec find_alt_ok #a (f:a -> bool) (l:list a)
+  : Lemma (match find_alt f l with
+           | Some x -> f x
+           | _ -> true)
+  = match l with
+    | [] -> ()
+    | _ :: tl -> find_alt_ok f tl
+
+
+Here is a function fold_left , where:
+
+fold_left f [b1; ...; bn] a = f (bn, ... (f b2 (f b1 a)))
+
+
+let rec fold_left #a #b (f: b -> a -> a) (l: list b) (acc:a)
+  : a
+  = match l with
+    | [] -> acc
+    | hd :: tl -> fold_left f tl (f hd acc)
+
+
+Prove the following lemma:
+
+val fold_left_Cons_is_rev (#a:Type) (l:list a)
+  : Lemma (fold_left Cons l [] == reverse l)
+
+
+You will need to strengthen the induction hypothesis, and
+possibly to prove that append is associative and that append l [] == l .
+
+Answer
+
+let rec append_assoc #a (l1 l2 l3 : list a)
+  : Lemma (append l1 (append l2 l3) == append (append l1 l2) l3)
+  = match l1 with
+    | [] -> ()
+    | h1 :: t1 -> append_assoc t1 l2 l3
+
+let rec fold_left_Cons_is_rev_stronger #a (l1 l2: list a)
+  : Lemma (fold_left Cons l1 l2 == append (reverse l1) l2)
+  = match l1 with
+    | [] -> ()
+    | h1 :: t1 ->
+      // (1) [append (append (reverse t1) [h1]) l2
+      //      == append (reverse t1) (append [h1] l2)]
+      append_assoc (reverse t1) [h1] l2;
+      // (2) [fold_left Cons t1 (h1 :: l2) = append (reverse t1) (h1 :: l2)]
+      fold_left_Cons_is_rev_stronger t1 (h1 :: l2)
+      // append (reverse l1) l2
+      // =def= append (append (reverse t1) [h1]) l2
+      // =(1)= append (reverse t1) (append [h1] l2)
+      // =def= append (reverse t1) (h1 :: l2)
+      // =(2)= fold_left Cons t1 (h1 :: l2)
+      // =def= fold_left Cons l1 l2
+
+let rec append_right_unit #a (l1:list a)
+  : Lemma (append l1 [] == l1)
+  = match l1 with
+    | [] -> ()
+    | _ :: tl -> append_right_unit tl
+
+let fold_left_Cons_is_rev #a (l:list a)
+  : Lemma (fold_left Cons l [] == reverse l)
+  = fold_left_Cons_is_rev_stronger l [];
+    append_right_unit (reverse l)
+
+
+© Copyright 2020, Microsoft Research.
