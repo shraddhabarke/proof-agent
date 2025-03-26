@@ -34,6 +34,8 @@ class Agent:
         2. Incorporating error messages and hints from the F* compiler to identify and fix issues.
         3. Proposing corrections to ensure the code strictly adheres to F* syntax rules.
         4. Consulting the official F* tutorial at https://fstar-lang.org/tutorial/ and the guidelines below for best practices.
+        5. for this task, always call the module 'Test'
+        6. always print the code you generate and explain it
         F* Syntax Guidelines: 
         """
 
@@ -87,7 +89,7 @@ class Agent:
         )
 
         # Create the agent team
-        text_termination = TextMentionTermination("FINAL") # TODO: change termination message
+        text_termination = TextMentionTermination("All verification conditions discharged successfully") # TODO: change termination message
         self.team = RoundRobinGroupChat(
             participants=[self.syntax_agent, self.proof_agent],
             termination_condition=text_termination
