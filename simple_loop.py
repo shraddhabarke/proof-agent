@@ -54,8 +54,8 @@ def create_agent_team() -> RoundRobinGroupChat:
     return agent.get_team()
 
 def main() -> None:
-    st.set_page_config(page_title="UMAccesor Workbench", page_icon="🤖")
-    st.title("UMAccesor Workbench 🤖")
+    st.set_page_config(page_title="F* Proof Assistant", page_icon="🤖")
+    st.title("F* Proof Assistant 🤖")
 
     # Initialize agent team in session state
     if "agent_team" not in st.session_state:
@@ -82,6 +82,7 @@ def main() -> None:
     if prompt:
         st.session_state["messages"].append({"role": "user", "content": prompt})
         with st.chat_message("user"):
+            print("User: ", prompt)
             st.markdown(prompt)
 
         # Get or create event loop and run async chat

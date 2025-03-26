@@ -2,7 +2,7 @@ import subprocess
 import os
 import time
 from autogen_core.tools import FunctionTool
-
+import streamlit as st
 
 
 def compile_fstar_code(code_str:str) -> str:
@@ -29,7 +29,7 @@ def compile_fstar_code(code_str:str) -> str:
 
     # Compile the .fst file using fstar.exe
     try:
-        result = subprocess.run([fstar_path, file_path], capture_output=True, text=True, check=True)
+        result = subprocess.run([fstar_path, file_path], capture_output=True, text=True, check=True)    
         return result.stdout
     except subprocess.CalledProcessError as e:
         return f"An error occurred: {e.stderr}"
