@@ -8,6 +8,9 @@ from autogen_core.models import ChatCompletionClient
 import streamlit as st
 from streamlit_elements import elements, editor
 from streamlit_monaco import st_monaco
+from autogen_core.tools import FunctionTool
+from tools.agent_tools import compile_fstar_code
+
 
 
 class Agent:
@@ -34,6 +37,7 @@ class Agent:
         3. Proposing corrections to ensure the code strictly adheres to F* syntax rules.
         4. Consulting the official F* tutorial at https://fstar-lang.org/tutorial/ and the guidelines below for best practices.
         F* Syntax Guidelines: {fst_manual}
+        You must execute the compile_fstar function to check if the code is syntactically correct.
         """
 
         # Create system message for the F* Proof Expert
@@ -63,29 +67,32 @@ class Agent:
         7. Once all issues have been resolved, respond with "FINAL" to indicate that the refined code is ready.
         """
 
+        compile_fstar = FunctionTool(compile_fstar_code, description="Compile F* code")
+
         # Create the three agents with their respective roles and prompts
         self.syntax_agent = AssistantAgent(
             name="F* Syntax Expert",
             model_client=self.model_client,
             system_message=system_message_syntax,
+            tools=[compile_fstar]
         )
 
-        self.proof_agent = AssistantAgent(
-            name="F* Proof Expert",
-            model_client=self.proof_model_client,
-            system_message=system_message_proof,
-        )
+        # self.proof_agent = AssistantAgent(
+        #     name="F* Proof Expert",
+        #     model_client=self.proof_model_client,
+        #     system_message=system_message_proof,
+        # )
 
-        self.refinement_agent = AssistantAgent(
-            name="F* Refinement Agent",
-            model_client=self.refinement_model_client,
-            system_message=system_message_refinement,
-        )
+        # self.refinement_agent = AssistantAgent(
+        #     name="F* Refinement Agent",
+        #     model_client=self.refinement_model_client,
+        #     system_message=system_message_refinement,
+        # )
 
         # Create the agent team
         text_termination = TextMentionTermination("FINAL") # TODO: change termination message
         self.team = RoundRobinGroupChat(
-            participants=[self.syntax_agent, self.proof_agent, self.refinement_agent],
+            participants=[self.syntax_agent],
             termination_condition=text_termination
         )
 

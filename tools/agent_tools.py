@@ -1,16 +1,25 @@
 import subprocess
 import os
+import time
+from autogen_core.tools import FunctionTool
 
-def compile_fstar_code(code_str, file_name="temp.fst"):
+
+
+def compile_fstar_code(code_str:str) -> str:
     """
     Compiles a given F* code string using fstar.exe.
-
     :param code_str: The F* code as a string.
-    :param file_name: The name of the .fst file to create.
     :return: The output from the fstar.exe compilation process.
     """
+    # test for now, since the module name must match the file name
+    file_name = f"Test.fst"
+    directory = "temp_files"
+    #in root directory
+    os.makedirs(directory, exist_ok=True)
+    print(os.getcwd())
     # Write the code to a .fst file
-    with open(file_name, 'w') as f:
+    file_path = os.path.join(directory, file_name)
+    with open(file_path, 'w') as f:
         f.write(code_str)
 
     # Get the path to fstar.exe from the environment variable
@@ -20,7 +29,18 @@ def compile_fstar_code(code_str, file_name="temp.fst"):
 
     # Compile the .fst file using fstar.exe
     try:
-        result = subprocess.run([fstar_path, file_name], capture_output=True, text=True, check=True)
+        result = subprocess.run([fstar_path, file_path], capture_output=True, text=True, check=True)
         return result.stdout
     except subprocess.CalledProcessError as e:
         return f"An error occurred: {e.stderr}"
+
+
+# result = compile_fstar_code("""
+# module Test
+# let rec f x =
+#     if x = 0 then 0
+#     else x + f (x - 1)
+# """)
+# print(result)
+
+
