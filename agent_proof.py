@@ -8,6 +8,10 @@ from autogen_core.models import ChatCompletionClient
 import streamlit as st
 from streamlit_elements import elements, editor
 from streamlit_monaco import st_monaco
+from autogen_core.tools import FunctionTool
+from tools.agent_tools import compile_fstar_code
+
+
 import asyncio
 from graphrag_interface import query_graphrag
 
@@ -66,11 +70,14 @@ class Agent:
         7. Once all issues have been resolved, respond with "FINAL" to indicate that the refined code is ready.
         """
 
+        compile_fstar = FunctionTool(compile_fstar_code, description="Compile F* code")
+
         # Create the three agents with their respective roles and prompts
         self.syntax_agent = AssistantAgent(
             name="fstar_syntax_expert",
             model_client=self.model_client,
             system_message=system_message_syntax,
+            tools=[compile_fstar]
         )
 
         self.proof_agent = AssistantAgent(
