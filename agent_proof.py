@@ -10,10 +10,10 @@ from streamlit_elements import elements, editor
 from streamlit_monaco import st_monaco
 from autogen_core.tools import FunctionTool
 from tools.agent_tools import compile_fstar_code
+from graphrag_interface import query_graphrag
 
 
 import asyncio
-from graphrag_interface import query_graphrag
 
 class Agent:
     def __init__(self) -> None:
@@ -23,14 +23,8 @@ class Agent:
         self.proof_model_client = setup_azure_client(model="o1_2024-12-17", model_family="o1")
         self.refinement_model_client = setup_azure_client(model="o1_2024-12-17", model_family="o1")  # Refinement Agent
 
-        # Read the UMA manual
-        #with open('fst_manual.txt', 'r') as f: # todo
-        #fst_manual = asyncio.run(query_graphrag("Summarize F* language syntax and important guidelines"))
+        #fst_manual = asyncio.run(query_graphrag("Summarize F* language syntax, guidelines and few-shot examples related to the following query:"))
         #print(fst_manual)
-        #proof_examples = asyncio.run(query_graphrag("Show examples of verified F* proofs with lemmas and reasoning"))
-        #print(proof_examples)
-        ##with open('proof_examples.txt', 'r') as f: # todo
-            #proof_examples = f.read()
         
         # Create system message for the F* Syntax Expert
         system_message_syntax = f"""

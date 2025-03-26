@@ -8,6 +8,7 @@ from autogen_agentchat.conditions import ExternalTermination, TextMentionTermina
 from autogen_agentchat.teams import RoundRobinGroupChat
 from autogen_agentchat.ui import Console
 from autogen_core import CancellationToken
+from graphrag_interface import query_graphrag
 
 async def async_chat(team: RoundRobinGroupChat, prompt: str, file_content: str = None) -> str:
     """Async function to handle chat interactions with the agent team"""
@@ -79,18 +80,24 @@ def main() -> None:
             st.markdown(message["content"])
 
     prompt = st.chat_input("Type a message...")
+
+
     if prompt:
         st.session_state["messages"].append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
+        rag_output = asyncio.run(query_graphrag("Summarize F* language syntax, guidelines and few-shot examples related to the following query:" + prompt))
+        print("rag:", rag_output)
 
+        final_prompt = prompt + rag_output
+        print("Final:", final_prompt)
         # Get or create event loop and run async chat
         loop = get_or_create_eventloop()
         
         # Pass file_content as a separate parameter instead of modifying the prompt
         response = loop.run_until_complete(async_chat(
             st.session_state["agent_team"], 
-            prompt,
+            final_prompt,
             file_content=file_content if file_content else None
         ))
 

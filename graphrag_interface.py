@@ -35,7 +35,7 @@ model = ModelManager().get_or_create_chat_model(
 token_encoder = tiktoken.encoding_for_model(llm_model)
 
 # parquet files generated from indexing pipeline
-INPUT_DIR = "/home/sbarke/graphrag/ragtest/output"
+INPUT_DIR = "./output"
 COMMUNITY_TABLE = "communities"
 COMMUNITY_REPORT_TABLE = "community_reports"
 ENTITY_TABLE = "entities"
