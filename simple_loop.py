@@ -1,7 +1,7 @@
 import asyncio
 from asyncio import AbstractEventLoop
 import streamlit as st
-from agent import Agent
+from agent_proof import Agent
 from autogen_agentchat.agents import AssistantAgent
 from autogen_agentchat.base import TaskResult
 from autogen_agentchat.conditions import ExternalTermination, TextMentionTermination
