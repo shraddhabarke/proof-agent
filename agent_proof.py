@@ -40,6 +40,7 @@ class Agent:
         3. Proposing corrections to ensure the code strictly adheres to F* syntax rules.
         4. Consulting the official F* tutorial at https://fstar-lang.org/tutorial/ and the guidelines below for best practices.
         5. for this task, always call the module 'Test'
+        6. always print the code you generate and explain it
         F* Syntax Guidelines: 
         """
 
