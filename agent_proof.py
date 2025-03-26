@@ -8,22 +8,25 @@ from autogen_core.models import ChatCompletionClient
 import streamlit as st
 from streamlit_elements import elements, editor
 from streamlit_monaco import st_monaco
-
+import asyncio
+from graphrag_interface import query_graphrag
 
 class Agent:
     def __init__(self) -> None:
         # Use the existing Azure client setup
         self.model_client = setup_azure_client()
         #critic model
-        self.critic_model_client = setup_azure_client(model="o1_2024-12-17", model_family="o1")
+        self.proof_model_client = setup_azure_client(model="o1_2024-12-17", model_family="o1")
         self.refinement_model_client = setup_azure_client(model="o1_2024-12-17", model_family="o1")  # Refinement Agent
 
         # Read the UMA manual
-        with open('fst_manual.txt', 'r') as f: # todo
-            fst_manual = f.read()
-        
-        with open('proof_examples.txt', 'r') as f: # todo
-            proof_examples = f.read()
+        #with open('fst_manual.txt', 'r') as f: # todo
+        #fst_manual = asyncio.run(query_graphrag("Summarize F* language syntax and important guidelines"))
+        #print(fst_manual)
+        #proof_examples = asyncio.run(query_graphrag("Show examples of verified F* proofs with lemmas and reasoning"))
+        #print(proof_examples)
+        ##with open('proof_examples.txt', 'r') as f: # todo
+            #proof_examples = f.read()
         
         # Create system message for the F* Syntax Expert
         system_message_syntax = f"""
@@ -33,7 +36,7 @@ class Agent:
         2. Incorporating error messages and hints from the F* compiler to identify and fix issues.
         3. Proposing corrections to ensure the code strictly adheres to F* syntax rules.
         4. Consulting the official F* tutorial at https://fstar-lang.org/tutorial/ and the guidelines below for best practices.
-        F* Syntax Guidelines: {fst_manual}
+        F* Syntax Guidelines: 
         """
 
         # Create system message for the F* Proof Expert
@@ -44,11 +47,11 @@ class Agent:
             - The importance of finding relevant lemmas before starting the proof process.
             - Variations in using library definitions: you could reuse them as-is, or consider strengthening or re-implementing them if the specifications are too weak. For instance, if a library function's specification (e.g., from FStar.List.Tot) is insufficient, consider rewriting it with a tighter specification.
         3. Evaluating the proofs step-by-step, ensuring that all necessary lemmas and definitions are correctly applied.
-        4. Consulting the F* tutorial at https://fstar-lang.org/tutorial/ along with the guidelines and examples provided.
+        4. Consulting the F* tutorial at https://fstar-lang.org/tutorial/ along with the guidelines and examples provided. 
         F* Guidelines for Proofs:
-            {fst_manual}
+           
         Proof Examples:
-            {proof_examples}
+           respond with "FINAL" to indicate that the code is ready
         """
 
         # Create system message for the F* Iterative Refinement Agent
@@ -65,19 +68,19 @@ class Agent:
 
         # Create the three agents with their respective roles and prompts
         self.syntax_agent = AssistantAgent(
-            name="F* Syntax Expert",
+            name="fstar_syntax_expert",
             model_client=self.model_client,
             system_message=system_message_syntax,
         )
 
         self.proof_agent = AssistantAgent(
-            name="F* Proof Expert",
+            name="fstar_proof_expert",
             model_client=self.proof_model_client,
             system_message=system_message_proof,
         )
 
         self.refinement_agent = AssistantAgent(
-            name="F* Refinement Agent",
+            name="fstar_refinement_agent",
             model_client=self.refinement_model_client,
             system_message=system_message_refinement,
         )
@@ -85,7 +88,7 @@ class Agent:
         # Create the agent team
         text_termination = TextMentionTermination("FINAL") # TODO: change termination message
         self.team = RoundRobinGroupChat(
-            participants=[self.syntax_agent, self.proof_agent, self.refinement_agent],
+            participants=[self.syntax_agent, self.proof_agent],
             termination_condition=text_termination
         )
 
