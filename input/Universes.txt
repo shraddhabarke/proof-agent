@@ -1,0 +1,628 @@
+- Universes
+
+As mentioned earlier , Type is the
+type of types. So, one might ask the question, what is the type of Type itself? Indeed, one can write the following and it may appear
+at first that the type of Type is Type .
+
+let ty : Type = Type
+
+
+However, behind the scenes, F* actually has a countably infinite
+hierarchy of types, Type u#0 , Type u#1 , Type u#2 , …, and
+the type of Type u#i is actually Type u#(i + 1) .  The u#i suffixes are called universe levels and if you give F* the following
+option, it will actually show you the universe levels it inferred when
+it prints a term.
+
+#push-options "--print_universes"
+
+
+With this option enabled, in fstar-mode.el, the F* emacs plugin,
+hovering on the symbol ty prints Type u#(1 + _) , i.e., the
+type of ty is in a universe that is one greater than some universe
+metavariable _ , i.e., ty is universe polymorphic . But, we’re
+getting a bit ahead of ourselves.
+
+In this chapter, we’ll look at universe levels in detail, including
+why they’re necessary to avoid paradoxes, and showing how to
+manipulate definitions that involve universes. For the most part, F*
+infers the universe levels of a term and you don’t have to think too
+much about it—in fact, in all that we’ve seen so far, F* inferred
+universe levels behind the scenes and we haven’t had to mention
+them. Though, eventually, they do crop up and understanding what they
+mean and how to work with them becomes necessary.
+
+Other resources to learn about universes:
+
+- The Agda manual has a nice chapter on universes ,
+including universe polymorphism.
+
+- This chapter from Adam Chlipala’s Certified Programming with
+Dependent Types describes universes in Coq. While it also provides useful
+background, F*’s universe system is more similar to Agda’s and
+Lean’s than Coq’s.
+
+A universe annotation on a term takes the form u#l , where l is
+a universe level. The universe levels are terms from the following
+grammar:
+
+k ::= 0 | 1 | 2 | ...    any natural number constant
+l ::= k                  universe constant
+    | l + k | k + l      constant offset from level l
+    | max l1 l2          maximum of two levels
+    | a | b | c | ...    level variables
+
+
+Let’s revisit our first example, this time using explicit universe
+annotations to make things clearer.
+
+We’ve defined, below, instances of Type for universe levels 0, 1, 2 and we see that each of them has a type at the next level. The
+constant Type u#0 is common enough that F* allows you to write Type0 instead.
+
+let ty0 : Type u#1 = Type u#0
+let ty0' : Type u#1 = Type0
+let ty1 : Type u#2 = Type u#1
+let ty2 : Type u#3 = Type u#2
+
+
+If you try to define ty_bad below, F* complains with the following
+error:
+
+let ty_bad : Type u#0 = Type u#0
+
+
+Expected expression of type "Type0"; got expression "Type0" of type "Type u#1"
+
+
+The restriction that prevents a Type from being an inhabitant of
+itself if sometimes called predicativity . The opposite, impredicativity , if not suitably restricted, usually leads to
+logical inconsistency. F* provides a limited form of impredicativity
+through the use of squash types, which we’ll see towards the end
+of this chapter.
+
+Note
+
+That said, if we didn’t turn on the option --print_universes , the
+error message you get may be, sadly, bit baffling:
+
+Expected expression of type "Type"; got expression "Type" of type "Type"
+
+
+Turning on --print_universes and --print_implicits is a
+good way to make sense of type errors where the expected type and
+the type that was computed seem identical.
+
+Now, instead of defining several constants like ty0, ty1, ty2 etc., F* definitions can be universe polymorphic . Below, we define ty_poly as Type u#a , for any universe variable a , and so ty has type Type u#(a + 1) .
+
+let ty_poly : Type u#(a + 1) = Type u#a
+
+
+One way to think of ty_poly is as a “definition template”
+parameterized by the by the universe-variable a . One can
+instantiate ty_poly with a specific universe level l (by
+writing ty_poly u#l ) and obtain a copy of its definition
+specialized to level l . F* can prove that instantiation of ty_poly are equal to the non-polymorphic definitions we had
+earlier. As the last example shows, F* can usually infer the universe
+instantiation, so you often don’t need to write it.
+
+let _ = assert (ty_poly u#0 == ty0)
+let _ = assert (ty_poly u#1 == ty1)
+let _ = assert (ty_poly u#2 == ty2)
+let _ = assert (ty_poly == ty0)
+
+
+Every type in F* lives in a particular universe. For example, here are
+some common types in Type u#0 .
+
+let _ : Type0 = nat
+let _ : Type0 = bool
+let _ : Type0 = nat -> bool
+
+
+Universe of an arrow type : In general, the universe of an arrow
+type x:t -> t' is the the maximum of the universe of t and t' .
+
+This means that functions that are type-polymorphic live in higher
+universes. For example, the polymorphic identity function that we saw
+in an earlier section , is
+actually also polymorphic in the universe level of its type argument.
+
+let id_t : Type u#(i + 1) = a:Type u#i -> a -> a
+let id : id_t = fun a x -> x
+
+
+That is, the type of the identity function id is id_t or a:Type u#i -> a -> a —meaning, for all types a in
+universe Type u#i , id a is function of type a -> a .
+
+Now, id_t is itself a type in universe Type u#(i + 1) , and
+since the id function can be applied to types in any universe, it
+can be applied to id_t too. So, it may look like this allows one
+to write functions that can be applied to themselves—which would be
+bad, since that would allow one to create infinite loops and break
+F*’s logic.
+
+let seemingly_self_application : id_t = id _ id
+
+
+However, if we write out the universe levels explicitly, we see that
+actually we aren’t really applying the id function to
+itself. Things are actually stratified, so that we are instead applying an
+instance of id at universe u#(i + 1) to the instance of id at universes u#i .
+
+let stratified_application : id_t u#i = id u#(i + 1) (id_t u#i) (id u#i)
+
+
+One intuition for what’s happening here is that there are really
+infinitely many instances of the F* type system nested within each
+other, with each instance forming a universe. Type-polymorphic
+functions (like id ) live in some universe u#(a + 1) and are
+parameterized over all the types in the immediately preceding universe u#a . The universe levels ensure that an F* function within
+universe level u#a cannot consume or produce terms that live in
+some greater universe.
+
+F* computes a universe level for inductive type definitions. To
+describe the rules for this in full generality, consider again the
+general form of an inductive type definition, shown first here , but this time with the universe level of each
+type constructor made explicit, i.e., T i constructs a type in
+universe Type u # l i
+
+Recall that each type constructor T i has zero or more data
+constructors D i : t i ― and for each data constructor D i j , its type t i j must be of the form z i j : s i j ― → T i x i ¯ e ¯
+
+In addition to checking, as usual, that the each t i j is
+well-typed, F* also checks the universe levels according to the
+following rule:
+
+- Assuming that each T i has universe level l i , for
+every data constructor D i j , and for each of its
+arguments z i j k : s i j k , check s i j k : Type u # l i j k and l i j k ≤ l i .
+
+In other words, the universe level of each type constructor must not
+be less than the universe of any of the fields of data constructors.
+
+In practice, F* infers the universe levels l 1 , … , l n , by
+collecting level-inequality constraints and solving them using the max operator on universe levels, i.e., l i is set to m a x j k l i j k , the maximum of the universe levels of all
+the fields of the constructors D i : t i ― . Let’s
+look at some examples.
+
+The list type below is parameterized by a:Type u#a and
+constructs a type in the same universe.
+
+type list (a:Type u#a) : Type u#a  =
+ | Nil : list a
+ | Cons : hd:a -> tl:list a -> list a
+
+
+- The Nil constructor has no fields, so it imposes no
+constraints on the universe level of list a .
+
+- The Cons constructor has two fields. Its first field hd has type a: Type u#a : we have a constraint that u#a ≤ u#a ; and
+the second field, by assumption, has type list a : Type u#a ,
+and again we have the constraint u#a ≤ u#a .
+
+F* infers the minimum satisfiable universe level assignment, by
+default. But, there are many solutions to the inequalities, and if
+needed, one can use annotations to pick another solution. For example,
+one could write this, though it rarely makes sense to pick a universe
+for a type higher than necessary (see this section for an exception).
+
+type list' (a:Type u#a) : Type u#(1 + a)  =
+ | Nil' : list' a
+ | Cons' : hd:a -> tl:list' a -> list' a
+
+
+Note
+
+Universe level variables are drawn from a different namespace than
+other variables. So, one often writes a:Type u#a , where a is a regular variable and u#a is the universe level of the type
+of a .
+
+The pair type below is parameterized by a:Type u#a and b:Type u#b and constructs a type in u#(max a b) .
+
+type pair (a:Type u#a) (b:Type u#b) : Type u#(max a b) =
+  | Pair : fst:a -> snd:b -> pair a b
+
+
+- The fst field is in u#a and so we have u#a ≤ u#(max a b) .
+
+- The snd field is in u#b and so we have u#b ≤ u#(max a b) .
+
+The top type below packages a value at any type a:Type u#a with its type.
+
+noeq
+type top : Type u#(a + 1) =
+  | Top : a:Type u#a -> v:a -> top
+
+
+- The a field of Top is in u#(a + 1) while the v field
+is in u#a . So, top itself is in u#(max (a + 1) a) ,
+which simplifies to u#(a + 1) .
+
+One intuition for why this is so is that from a value of type t : top one can write a function that computes a value of type Type u#a , i.e., Top?.a t . So, if instead we have top: Type u#a and t:top , then Top?.a : top -> Type u#a , which would break
+the stratification of universes, since from a value top in
+universe u#a , we would be able to project out a value in Type u#(a + 1) , which leads to a paradox, as we’ll see next.
+
+What follows is quite technical and you only need to know that the
+universe system exists to avoid paradoxes, not how such paradoxes are
+constructed.
+
+Type theory has its roots in Bertrand Russell’s The Principles
+of Mathematics , which
+explores the logical foundations of mathematics and set theory. In
+this work, Russell proposed the paradoxical set Δ whose
+elements are exactly all the sets that don’t contain themselves and
+considered whether or not Δ contained itself. This
+self-referential construction is paradoxical since:
+
+- If Δ ∈ Δ , then since the only sets in Δ are the sets that don’t contain themselves, we can
+conclude that Δ ∉ Δ .
+
+- On the other hand, if Δ ∉ Δ , then since Δ contains all sets that don’t contain themselves, we
+can conclude that Δ ∈ Δ .
+
+To avoid such paradoxes, Russell formulated a stratified system of
+types to prevent nonsensical constructions that rely on
+self-reference. The universe levels of modern type theories serve much
+the same purpose.
+
+In fact, as the construction below shows, if it were possible to break
+the stratification of universes in F*, then one can code up Russell’s Δ set and prove False . This construction is derived
+from Thorsten Altenkirch’s Agda code . Liam
+O’Connor also provides some useful context and comparison . Whereas
+the Agda code uses a special compiler pragma to enable unsound
+impredicativity, in F* we show how a user-introduced axiom can
+simulate impredicativity and enable the same paradox.
+
+Consider the following axioms that intentionally break the
+stratification of F*’s universe system. We’ll need the following
+ingredients:
+
+- A strictly positive type constructor lower that takes a type in
+any universe a:Type u#a , and returns a type in u#0 . Note,
+we covered strictly positive type functions, previously .
+
+assume
+val lower ([@@@strictly_positive] a:Type u#a) : Type u#0
+
+
+- Assume there is a function called inject , which takes value of
+type x:a and returns value of type lower a .
+
+assume
+val inject (#a:Type u#a) (x:a) : lower a
+
+
+- lower and inject on their own are benign (e.g., let lower _ = unit and let inject _ = () ). But, now if we assume we
+have a function project that is the inverse of inject , then
+we’ve opened the door to paradoxes.
+
+assume
+val project (#a:Type u#a) (x:lower a) : a
+
+assume
+val inj_proj (#a:Type u#a) (x:a)
+  : Lemma (project (inject x) == x)
+
+
+To show the paradox, we’ll define a notion of set in terms of a
+form of set comprehensions f: x -> set , where x:Type u#0 is
+the domain of the comprehension, supposedly bounding the cardinality
+of the set.  We’ll subvert the universe system by treating set as
+living in universe u#0 , even though its constructor Set has a
+field x:Type u#0 that has universe level u#1
+
+noeq
+type _set : Type u#1 =
+  | Set : x:Type0 -> f:(x -> set) -> _set
+and set : Type0 = lower _set
+
+
+This construction allows us to define many useful sets. For example,
+the empty set zero uses the empty type False as the domain of
+its comprehension and so has no elements; or the singleton set one whose only element is the empty set; or the set two that contains
+the empty set zero and the singleton set one .
+
+let zero : set = inject (Set False (fun _ -> false_elim()))
+let one : set = inject (Set True (fun _ -> zero))
+let two : set = inject (Set bool (fun b -> if b then zero else one))
+
+
+One can also define set membership: A set a is a member of a set b , if one can exhibit an element v of the domain type of b (i.e., (project b).x ), such that b ’s comprehension (project b).f applied to v is a .
+
+For example, one can prove mem zero two by picking true for v and mem one two by picking false for v . Non-membership is just the negation of membership.
+
+let mem (a:set) (b:set) : Type0 =
+  (v:(project b).x & (a == (project b).f v))
+
+let not_mem (a:set) (b:set) : Type0 = mem a b -> False
+
+
+Now, we are ready to define Russell’s paradoxical set Δ . First, we define delta_big in a larger universe
+and then use inject to turn it into a set : Type u#0 . The
+encoding of delta_big is fairly direct: Its domain type is the
+type of sets s paired with a proof that s does not contain
+itself; and its comprehension function just returns s itself.
+
+let delta_big = Set (s:set & not_mem s s) dfst
+let delta : set = inject delta_big
+
+
+We can now prove both delta `mem` delta and delta `not_mem` delta , using the unsound inj_proj axiom that breaks the universe
+system, and derive False .
+
+let x_in_delta_x_not_in_delta (x:set) (mem_x_delta:mem x delta)
+  : not_mem x x 
+  = let (| v, r |) = mem_x_delta in // mem proofs are pairs
+    let v : (project delta).x = v in // whose first component is an element of delta's comprehension domain
+    let r : (x == (project delta).f v) = r in //and whose second component proves that x is equal to an element in delta
+    inj_proj delta_big; // we use the unsound axiom to conclude that `v` is actually the domain of delta_big
+    let v : (s:set & not_mem s s) = v in //and now we can retype `v` this way
+    let (| s, pf |) = v in //and unpack it into its components
+    let r : (x == s) = r in //and the axiom also allows us to retype `r` this way
+    let pf : not_mem x x = pf in //which lets us convert pf from `not_mem s s` to the goal
+    pf //not_mem x x
+
+let delta_not_in_delta
+  : not_mem delta delta
+  = fun (mem_delta_delta:mem delta delta) ->
+      x_in_delta_x_not_in_delta 
+          delta
+          mem_delta_delta
+          mem_delta_delta
+
+let x_not_mem_x_x_mem_delta (x:set) (x_not_mem_x:x `not_mem` x)
+  : x `mem` delta
+  = let v : (s:set & not_mem s s) = (| x, x_not_mem_x |) in //an element of the domain set of delta_big
+    inj_proj delta_big; // the unsound axiom now lets us relate it to delta
+    let s : (x == (project delta).f v) = //and prove that projecting delta's comprehension and applying to v return x`
+        FStar.Squash.return_squash Refl
+    in
+    (| v,  s |)
+
+let delta_in_delta
+  : mem delta delta
+  = x_not_mem_x_x_mem_delta delta delta_not_in_delta
+  
+let ff : False = delta_not_in_delta delta_in_delta
+
+
+The proofs are more detailed than they need to be, and if you’re
+curious, maybe you can follow along by reading the comments.
+
+The upshot, however, is that without the stratification of universes,
+F* would be unsound.
+
+We’ve seen how universes levels are computed for arrow types and
+inductive type definitions. The other way in which types can be formed
+in F* is with refinement types: x:t{p} . As we’ve seen previously,
+a value v of type x:t{p} is just a v:t where p[v/x] is
+derivable in the current scope in F*’s SMT-assisted classical
+logic—there is no way to extract a proof of p from a proof of x:t{p} , i.e., refinement types are F*’s mechanism for proof
+irrelevance.
+
+Universe of a refinement type : The universe of a refinement type x:t{p} is the universe of t .
+
+Since the universe of a refinement type does not depend on p , it
+enables a limited form of impredicativity, and we can define the
+following type (summarized here from the F* standard library FStar.Squash ):
+
+let squash (p:Type u#p) : Type u#0 = _:unit { p }
+let return_squash (p:Type u#p) (x:p) : squash p = ()
+
+
+This is a lot like the lower and inject assumptions that we
+saw in the previous section, but, importantly, there is no project operation to invert an inject . In fact, FStar.Squash proves
+that squash p is proof irrelevant, meaning that all proofs of squash p are equal.
+
+val proof_irrelevance (p: Type u#p) (x y: squash p) : squash (x == y)
+
+
+FStar.Squash does provide a limited way to manipulate a proof of p given a squash p , using the combinator bind_squash shown
+below, which states that if f can build a proof squash b from any
+proof of a , then it can do so from the one and only proof of a that is witnessed by x:squash a .
+
+val bind_squash (#a: Type u#a) (#b: Type u#b) (x: squash a) (f: (a -> squash b)) : squash b
+
+
+It is important that bind_squash return a squash b ,
+maintaining the proof-irrelevance of the squash type. Otherwise,
+if one could extract a proof of a from squash a , we would be
+perilously close to the unsound project axiom which enables
+paradoxes.
+
+This restriction is similar to Coq’s restriction on its Prop type,
+forbidding functions that match on Prop to return results outside Prop .
+
+The F* type prop (which we saw first here ) is
+defined primitively as type of all squashed types, i.e., the only
+types in prop are types of the form squash p ; or,
+equivalently, every type t : prop , is a subtype of unit . Being
+the type of a class of types, prop in F* lives in u#1
+
+let _ : Type u#1 = prop
+
+
+However, prop still offers a form of impredicativity, e.g., you
+can quantify over all prop while remaining in prop .
+
+let _ : Type u#1 = a:prop -> a
+let _ : Type u#0 = squash (a:prop -> a)
+let _ : prop = forall (a:prop). a
+let _ : prop = exists (a:prop). a
+
+
+- The first line above shows that, as usual, an arrow type is in a
+universe that is the maximum of the universes of its argument and
+result types. In this case, since it has an argument prop : Type u#1 the arrow itself is in u#1 .
+
+- The second line shows that by squashing the arrow type, we can bring
+it back to u#0
+
+- The third line shows the more customary way of doing this in F*,
+where forall (a:prop). a is just syntactic sugar for squash (a:prop -> a) . Since this is a squash type, not only does it
+live in Type u#0 , it is itself a prop .
+
+- The fourth line shows that the same is true for exists .
+
+In some type theories, notably in Coq, the universe system is cumulative , meaning that Type u#i : Type u#(max (i + i) j) ;
+or, that Type u#i inhabits all universes greater than i . In contrast, in F*, as in Agda and Lean, Type u#i : Type u#(i + 1) , i.e., a type resides only in the universe immediately
+above it.
+
+Cumulativity is a form of subtyping on universe levels, and it can be
+quite useful, enabling definitions at higher universes to be re-used
+for all lower universes. However, systems that mix universe
+polymorphism with cumulativity are quite tricky, and indeed, it was
+only recently that Coq offered both universe polymorphism and
+cumulativity.
+
+Lacking cumulativity, F* provides a library FStar.Universe that
+enables lifting a term from one universe to a higher one. We summarize
+it here:
+
+val raise_t ([@@@ strictly_positive] t : Type u#a) : Type u#(max a b)
+
+val raise_val (#a:Type u#a) (x:a) : raise_t u#a u#b a
+
+val downgrade_val (#a:Type u#a) (x:raise_t u#a u#b a) : a
+
+val downgrade_val_raise_val (#a: Type u#a) (x: a)
+  : Lemma (downgrade_val u#a u#b (raise_val x) == x)
+
+val raise_val_downgrade_val (#a: Type u#a) (x: raise_t u#a u#b a)
+  : Lemma (raise_val (downgrade_val x) == x)
+
+
+The type raise_t t is strictly positive in t and raises t from u#a to u#(max a b) . raise_val and downgrade_val are mutually inverse functions between t and raise_t t .
+
+This signature is similar in structure to the unsound signature for lower, inject, project that we use to exhibit Russell’s
+paradox. However, crucially, the universe levels in raise_t ensure
+that the universe levels increase , preventing any violation of
+universe stratification.
+
+In fact, this signature is readily implemented in F*, as shown below,
+where the universe annotation on raise_t explicitly defines the
+type in a higher universe u#(max a b) rather than in its minimum
+universe u#a .
+
+noeq
+type raise_t (a : Type u#a) : Type u#(max a b) =
+  | Ret : a -> raise_t a
+
+let raise_val #a x = Ret x
+let downgrade_val #a x = match x with Ret x0 -> x0
+let downgrade_val_raise_val #a x = ()
+let raise_val_downgrade_val #a x = ()
+
+
+Whenever you write Type in F*, you are implicitly writing Type u#?x , where ?x is a universe metavariable left for F* to infer. When
+left implicit, this means that F* may sometimes infer universes for
+your definition that are not what you expect—they may be too general
+or not general enough. We conclude this section with a few tips to
+detect and fix such problems.
+
+- If you see puzzling error messages, enable the following pragma: #push-options "--print_implicits --print_universes" This will cause F* to print larger terms in error messages, which
+you usually do not want, except when you are confronted with error
+messages of the form “expected type t; got type t”.
+
+#push-options "--print_implicits --print_universes"
+
+
+- Aside from the built-in constants Type u#a , the -> type
+constructor, and the refinement type former, the only universe
+polymorphic F* terms are top-level definitions. That is, while you
+can define i at the top-level and use it polymorphically: let i (#a:Type) (x:a) = x let _ = i u#0 0, i u#1 nat, i u#2 (Type u#0) You cannot do the same in a non-top-level scope: let no_universe_poly_locally () = let i (#a:Type) (x:a) = x in let _ = i u#0 0, i u#1 nat, i u#2 (Type u#0) in () Of course, non-universe-polymorphic definitions work at all scopes,
+e.g., here, the i is polymorphic in all types at universe u#0 . let type_poly_locally () = let i (#a:Type) (x:a) = x in let _ = i #unit (), i #bool true , i #nat 0 in ()
+
+let i (#a:Type) (x:a) = x
+let _ = i u#0 0, i u#1 nat, i u#2 (Type u#0)
+
+
+let no_universe_poly_locally () = 
+  let i (#a:Type) (x:a) = x in
+  let _ = i u#0 0, i u#1 nat, i u#2 (Type u#0) in
+  ()
+
+
+let type_poly_locally () = 
+  let i (#a:Type) (x:a) = x in
+  let _ = i #unit (), i #bool true, i #nat 0 in
+  ()
+
+
+- If you write a val f : t declaration for f , F* will compute
+the most general universe for the type t independently of the let f = e or type f = definition. A simple example of this behavior is the following. Say, you declare tup2 as below. val tup2 (a:Type) (b:Type) : Type Seeing this declaration F* infers val tup2 (a:Type u#a) (b:Type u#b) : Type u#c , computing the most general type for tup2 . If you now try to define tup2 , let tup2 a b = a & b F* complains with the following error (with --print_universes on): Type u #(max uu___43588 uu___43589) is not a subtype of the expected type Type u#uu___43590 Meaning that the inferred type for the definition of tup2 a b is Type u#(max a b) , which is of course not the same as Type u#c , and, sadly, the auto-generated fresh names in the error
+message don’t make your life any easier. The reason for this is that one can write a val f : t in a
+context where a definition for f may never appear, in which case
+F* has to compute some universes for t —it chooses the most
+general universe, though if you do try to implement f you may
+find that the most general universe is too general. A good rule of thumb is the following: Do not write a val declaration for a term, unless you are
+writing an interface . Instead, directly
+write a let or type definition and annotate it with the
+type you expect it to have—this will lead to fewer
+surprises. For example, instead of separating the val tup2 from let tup2 just write them together, as shown below, and F*
+infers the correct universes. let tuple2 (a:Type) (b:Type) : Type = a & b If you must write a val f : t , because, say, the type t is
+huge, or because you are writing an interface, it’s a good idea to
+be explicit about universes, so that when defining f , you know
+exactly how general you have to be in terms of universes; and,
+conversely, users of f know exactly how much universe
+polymorphism they are getting. For example: val tup2_again (a:Type u#a) (b:Type u#b) : Type u#(max a b) let tup2_again a b = a & b
+
+val tup2 (a:Type) (b:Type) : Type
+
+
+let tup2 a b = a & b
+
+
+Type u#(max uu___43588 uu___43589) is not a subtype of the expected type Type u#uu___43590
+
+
+- Do not write a val declaration for a term, unless you are
+writing an interface . Instead, directly
+write a let or type definition and annotate it with the
+type you expect it to have—this will lead to fewer
+surprises. For example, instead of separating the val tup2 from let tup2 just write them together, as shown below, and F*
+infers the correct universes. let tuple2 (a:Type) (b:Type) : Type = a & b
+
+let tuple2 (a:Type) (b:Type) : Type = a & b
+
+
+- If you must write a val f : t , because, say, the type t is
+huge, or because you are writing an interface, it’s a good idea to
+be explicit about universes, so that when defining f , you know
+exactly how general you have to be in terms of universes; and,
+conversely, users of f know exactly how much universe
+polymorphism they are getting. For example: val tup2_again (a:Type u#a) (b:Type u#b) : Type u#(max a b) let tup2_again a b = a & b
+
+val tup2_again (a:Type u#a) (b:Type u#b) : Type u#(max a b)
+let tup2_again a b = a & b
+
+
+- When defining an inductive type, prefer using parameters over
+indexes, since usually type parameters lead to types in lower
+universes. For example, one might think to define lists this way: noeq type list_alt : Type u#a -> Type u#(a + 1) = 
+  | NilAlt: a:Type -> list_alt a
+  | ConsAlt: a:Type -> hd:a -> tl:list_alt a -> list_alt a Although semantically equivalent to the standard list type list (a:Type u#a) : Type u#a  =
+ | Nil : list a
+ | Cons : hd:a -> tl:list a -> list a list_alt produces a type in u#(a + 1) , since both NilAlt and ConsAlt have fields of type a:Type u#a . So, unless the
+index of your type varies among the constructors, use a parameter
+instead of an index. That said, recall that it’s the fields of the constructors of the
+inductive type that count. You can index your type by a type in any
+universe and it doesn’t influence the result type. Here’s an
+artificial example. type t : Type u#100 -> Type u#0 = 
+  | T : unit -> t (FStar.Universe.raise_t unit)
+
+noeq
+type list_alt : Type u#a -> Type u#(a + 1) = 
+  | NilAlt: a:Type -> list_alt a
+  | ConsAlt: a:Type -> hd:a -> tl:list_alt a -> list_alt a
+
+
+type list (a:Type u#a) : Type u#a  =
+ | Nil : list a
+ | Cons : hd:a -> tl:list a -> list a
+
+
+type t : Type u#100 -> Type u#0 = 
+  | T : unit -> t (FStar.Universe.raise_t unit)
+
+
+© Copyright 2020, Microsoft Research.
