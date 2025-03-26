@@ -40,7 +40,7 @@ async def async_chat(team: RoundRobinGroupChat, prompt: str, file_content: str =
                     st.success("Verified module: Test. All verification conditions discharged successfully.")
                     with open("./temp_files/Test.fst", "r") as f:
                         code = f.read()
-                        st.code(code, language="fstar")
+                        st.code(code, language="C")
                 elif "error occurred" in str(message.content):
                     st.error(str(message.content))
                 else:
