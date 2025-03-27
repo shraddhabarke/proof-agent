@@ -10,6 +10,7 @@ from streamlit_elements import elements, editor
 from streamlit_monaco import st_monaco
 from autogen_core.tools import FunctionTool
 from tools.agent_tools import compile_fstar_code
+from graphrag_interface import query_graphrag
 
 
 import asyncio
@@ -22,14 +23,8 @@ class Agent:
         self.proof_model_client = setup_azure_client(model="o1_2024-12-17", model_family="o1")
         self.refinement_model_client = setup_azure_client(model="o1_2024-12-17", model_family="o1")  # Refinement Agent
 
-        # Read the UMA manual
-        #with open('fst_manual.txt', 'r') as f: # todo
-        #fst_manual = asyncio.run(query_graphrag("Summarize F* language syntax and important guidelines"))
+        #fst_manual = asyncio.run(query_graphrag("Summarize F* language syntax, guidelines and few-shot examples related to the following query:"))
         #print(fst_manual)
-        #proof_examples = asyncio.run(query_graphrag("Show examples of verified F* proofs with lemmas and reasoning"))
-        #print(proof_examples)
-        ##with open('proof_examples.txt', 'r') as f: # todo
-            #proof_examples = f.read()
         
         # Create system message for the F* Syntax Expert
         system_message_syntax = f"""
@@ -41,7 +36,7 @@ class Agent:
         4. Consulting the official F* tutorial at https://fstar-lang.org/tutorial/ and the guidelines below for best practices.
         5. for this task, always call the module 'Test'
         6. always print the code you generate and explain it
-        F* Syntax Guidelines: 
+        If the compiler gives you an error, you must fix it. The task is not complete until the f* code compiles.
         """
 
         # Create system message for the F* Proof Expert
@@ -52,11 +47,8 @@ class Agent:
             - The importance of finding relevant lemmas before starting the proof process.
             - Variations in using library definitions: you could reuse them as-is, or consider strengthening or re-implementing them if the specifications are too weak. For instance, if a library function's specification (e.g., from FStar.List.Tot) is insufficient, consider rewriting it with a tighter specification.
         3. Evaluating the proofs step-by-step, ensuring that all necessary lemmas and definitions are correctly applied.
-        4. Consulting the F* tutorial at https://fstar-lang.org/tutorial/ along with the guidelines and examples provided. 
-        F* Guidelines for Proofs:
-           
-        Proof Examples:
-           respond with "FINAL" to indicate that the code is ready
+        4. Consulting the F* tutorial at https://fstar-lang.org/tutorial/ along with the guidelines and examples provided.            
+        If the compiler gives you an error, you must fix it. The task is not complete until the f* code compiles.
         """
 
         # Create system message for the F* Iterative Refinement Agent
@@ -68,7 +60,6 @@ class Agent:
         4. Carefully considering the choice of quantifiers when necessary, as this can simplify proofs.
         5. Aligning the structure of the specification with the implementation, such as setting up convenient 'spec' functions for each code portion.
         6. Consulting the official F* tutorial at https://fstar-lang.org/tutorial/ to ensure the final version adheres to best practices.
-        7. Once all issues have been resolved, respond with "FINAL" to indicate that the refined code is ready.
         """
 
         compile_fstar = FunctionTool(compile_fstar_code, description="Compile F* code")
@@ -85,12 +76,14 @@ class Agent:
             name="fstar_proof_expert",
             model_client=self.proof_model_client,
             system_message=system_message_proof,
+            tools=[compile_fstar]
         )
 
         self.refinement_agent = AssistantAgent(
             name="fstar_refinement_agent",
             model_client=self.refinement_model_client,
             system_message=system_message_refinement,
+            tools=[compile_fstar]
         )
 
         # Create the agent team

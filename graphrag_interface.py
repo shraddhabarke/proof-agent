@@ -3,6 +3,7 @@ import os
 import pandas as pd
 import tiktoken
 import asyncio
+import streamlit as st
 
 from graphrag.config.enums import ModelType
 from graphrag.config.models.language_model_config import LanguageModelConfig
@@ -35,7 +36,7 @@ model = ModelManager().get_or_create_chat_model(
 token_encoder = tiktoken.encoding_for_model(llm_model)
 
 # parquet files generated from indexing pipeline
-INPUT_DIR = "/home/sbarke/graphrag/ragtest/output"
+INPUT_DIR = "./output"
 COMMUNITY_TABLE = "communities"
 COMMUNITY_REPORT_TABLE = "community_reports"
 ENTITY_TABLE = "entities"
@@ -51,6 +52,7 @@ report_df = pd.read_parquet(f"{INPUT_DIR}/{COMMUNITY_REPORT_TABLE}.parquet")
 communities = read_indexer_communities(community_df, report_df)
 reports = read_indexer_reports(report_df, community_df, COMMUNITY_LEVEL)
 entities = read_indexer_entities(entity_df, community_df, COMMUNITY_LEVEL)
+
 
 print(f"Total report count: {len(report_df)}")
 print(
