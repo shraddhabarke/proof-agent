@@ -37,17 +37,19 @@ class Agent:
         5. for this task, always call the module 'Test'
         6. always print the code you generate and explain it
         If the compiler gives you an error, you must fix it. The task is not complete until the f* code compiles.
-        """
+        Before calling any function, you must first generate a proof and specification sketch. thinking step by step.        """
 
         # Create system message for the F* Proof Expert
         system_message_proof = f"""
-        You are a specialist in formal verification using F*. Your responsibilities include:
+        You are a specialist in formal verification using F*. You always go first. Your responsibilities include:
         1. Generating F* proofs and ensure that formal proofs are logically sound and verified wrt the specification.
         2. Incorporating regular feedback from the verifier, in order to assess whether the proof is in the correct direction. Also consider:
             - The importance of finding relevant lemmas before starting the proof process.
             - Variations in using library definitions: you could reuse them as-is, or consider strengthening or re-implementing them if the specifications are too weak. For instance, if a library function's specification (e.g., from FStar.List.Tot) is insufficient, consider rewriting it with a tighter specification.
         3. Evaluating the proofs step-by-step, ensuring that all necessary lemmas and definitions are correctly applied.
-        4. Consulting the F* tutorial at https://fstar-lang.org/tutorial/ along with the guidelines and examples provided.            
+        4. Consulting the F* tutorial at https://fstar-lang.org/tutorial/ along with the guidelines and examples provided.
+        You must start your task by thinking through the specifications and format of the ultimate solution.   
+        Before calling any function, you must first generate a proof and specification sketch. thinking step by step.           
         If the compiler gives you an error, you must fix it. The task is not complete until the f* code compiles.
         """
 

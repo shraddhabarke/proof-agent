@@ -13,6 +13,7 @@ import time
 import json
 import ast
 import re
+import os
 
 async def async_chat(team: RoundRobinGroupChat, prompt: str, file_content: str = None) -> str:
     """Async function to handle chat interactions with the agent team"""
@@ -41,7 +42,9 @@ async def async_chat(team: RoundRobinGroupChat, prompt: str, file_content: str =
                 
                 # Original message handling
                 if "FunctionCall" in str(message.content):
+
                   with open("./temp_files/Test.fst", "r") as f:
+                    f.seek(0)
                     code = f.read()
                     st.code(code, language="C")
                     # Keep the original warning for debugging
@@ -51,7 +54,15 @@ async def async_chat(team: RoundRobinGroupChat, prompt: str, file_content: str =
                     #st.warning(str(message.content))
                 elif "Verified module" in str(message.content):
                     st.success("Verified module: Test. All verification conditions discharged successfully.")
+                    # Add a small delay to ensure file is written
+                    time.sleep(0.1)  # 100ms delay
+                    
+                    # Force flush any file buffers
+     
+                    
                     with open("./temp_files/Test.fst", "r") as f:
+                        # Ensure we're reading from the start of file
+                        f.seek(0)
                         code = f.read()
                         st.code(code, language="C")
                 elif "error occurred" in str(message.content):
@@ -130,7 +141,7 @@ def main() -> None:
                         {}
                     </div>
                     """.format(rag_output), unsafe_allow_html=True)
-        final_prompt = prompt + rag_output
+        final_prompt = prompt + "\n\n Here is some relevant context which might be helpful, but incomplete for the task."+ rag_output
         print("Final:", final_prompt)
         # Get or create event loop and run async chat
         loop = get_or_create_eventloop()
