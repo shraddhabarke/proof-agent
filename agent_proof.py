@@ -22,7 +22,7 @@ class Agent:
         #critic model
         self.proof_model_client = setup_azure_client(model="o1_2024-12-17", model_family="o1")
         self.refinement_model_client = setup_azure_client(model="o1_2024-12-17", model_family="o1")  # Refinement Agent
-
+        self.reasoning_model = setup_azure_client(model="o3_2025-04-16", model_family="o3") # Reasoning agent
         #fst_manual = asyncio.run(query_graphrag("Summarize F* language syntax, guidelines and few-shot examples related to the following query:"))
         #print(fst_manual)
         
