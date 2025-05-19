@@ -1,7 +1,7 @@
 from tools.code_tools import setup_azure_client
 from autogen_agentchat.agents import AssistantAgent
 from autogen_agentchat.messages import TextMessage
-from autogen_agentchat.teams import RoundRobinGroupChat
+from autogen_agentchat.teams import RoundRobinGroupChat, SelectorGroupChat
 from autogen_agentchat.conditions import TextMentionTermination
 from autogen_core import CancellationToken
 from autogen_core.models import ChatCompletionClient
@@ -20,15 +20,15 @@ class Agent:
         # Use the existing Azure client setup
         self.model_client = setup_azure_client()
         #critic model
-        self.proof_model_client = setup_azure_client(model="o1_2024-12-17", model_family="o1")
-        self.refinement_model_client = setup_azure_client(model="o1_2024-12-17", model_family="o1")  # Refinement Agent
-        self.reasoning_model = setup_azure_client(model="o3_2025-04-16", model_family="o3") # Reasoning agent
-        #fst_manual = asyncio.run(query_graphrag("Summarize F* language syntax, guidelines and few-shot examples related to the following query:"))
+        self.proof_model_client = setup_azure_client(model="o3-mini_2025-01-31", model_family="o3")
+        # self.refinement_model_client = setup_azure_client(model="o1-mini_2024-09-12", model_family="o1")  # Refinement Agent
+        # self.reasoning_model = setup_azure_client(model="o3-mini_2025-01-31", model_family="o3") # Reasoning agent
+        # #fst_manual = asyncio.run(query_graphrag("Summarize F* language syntax, guidelines and few-shot examples related to the following query:"))
         #print(fst_manual)
         
         # Create system message for the F* Syntax Expert
         system_message_syntax = f"""
-        You are an expert in the F* programming language with a deep understanding of its syntax and language-specific constructs. Your responsibilities include:
+        You are an expert in the F* programming language with a deep understanding of its syntax and language-specific constructs. The proof agent will generate a proof sketch then you will make it happen with correct syntax. Your responsibilities include:
         1. Generating correct and syntactically valid F* code based on the natural language intent.
         2. Analyzing the generated F* code for syntactic errors and incorporate compiler feedback.
         2. Incorporating error messages and hints from the F* compiler to identify and fix issues.
@@ -37,11 +37,12 @@ class Agent:
         5. for this task, always call the module 'Test'
         6. always print the code you generate and explain it
         If the compiler gives you an error, you must fix it. The task is not complete until the f* code compiles.
-        Before calling any function, you must first generate a proof and specification sketch. thinking step by step.        """
+        Before calling any function, you must first generate a proof and specification sketch. thinking step by step.   
+        You must start with every response by saying: # Syntax Agent """
 
         # Create system message for the F* Proof Expert
         system_message_proof = f"""
-        You are a specialist in formal verification using F*. You always go first. Your responsibilities include:
+        You are a specialist in formal verification using F*. You always go first in the speaker selection. Your responsibilities include:
         1. Generating F* proofs and ensure that formal proofs are logically sound and verified wrt the specification.
         2. Incorporating regular feedback from the verifier, in order to assess whether the proof is in the correct direction. Also consider:
             - The importance of finding relevant lemmas before starting the proof process.
@@ -51,24 +52,27 @@ class Agent:
         You must start your task by thinking through the specifications and format of the ultimate solution.   
         Before calling any function, you must first generate a proof and specification sketch. thinking step by step.           
         If the compiler gives you an error, you must fix it. The task is not complete until the f* code compiles.
+
+        You must start with every response by saying: # Proof Reasoning Model
         """
 
-        # Create system message for the F* Iterative Refinement Agent
-        system_message_refinement = f"""
-        You are an expert in iterative refinement and proof optimization in F*. Your responsibilities include:
-        1. Integrating the feedback provided by both the F* Syntax Expert and the F* Proof Expert Agents.
-        2. Iteratively refining the F* code so that it is syntactically correct and aligns with the specification.
-        3. Prioritizing early drafting of specifications, deliberating on the most suitable representations (e.g., choosing between Seq and List) to balance efficiency with proof complexity.
-        4. Carefully considering the choice of quantifiers when necessary, as this can simplify proofs.
-        5. Aligning the structure of the specification with the implementation, such as setting up convenient 'spec' functions for each code portion.
-        6. Consulting the official F* tutorial at https://fstar-lang.org/tutorial/ to ensure the final version adheres to best practices.
-        """
+        # # Create system message for the F* Iterative Refinement Agent
+        # system_message_refinement = f"""
+        # You are an expert in iterative refinement and proof optimization in F*. Your responsibilities include:
+        # 1. Integrating the feedback provided by both the F* Syntax Expert and the F* Proof Expert Agents.
+        # 2. Iteratively refining the F* code so that it is syntactically correct and aligns with the specification.
+        # 3. Prioritizing early drafting of specifications, deliberating on the most suitable representations (e.g., choosing between Seq and List) to balance efficiency with proof complexity.
+        # 4. Carefully considering the choice of quantifiers when necessary, as this can simplify proofs.
+        # 5. Aligning the structure of the specification with the implementation, such as setting up convenient 'spec' functions for each code portion.
+        # 6. Consulting the official F* tutorial at https://fstar-lang.org/tutorial/ to ensure the final version adheres to best practices.
+        # """
 
         compile_fstar = FunctionTool(compile_fstar_code, description="Compile F* code")
 
         # Create the three agents with their respective roles and prompts
         self.syntax_agent = AssistantAgent(
             name="fstar_syntax_expert",
+            description ="F* Syntax Expert",
             model_client=self.model_client,
             system_message=system_message_syntax,
             tools=[compile_fstar]
@@ -76,24 +80,42 @@ class Agent:
 
         self.proof_agent = AssistantAgent(
             name="fstar_proof_expert",
+            description ="F* Proof Expert",
             model_client=self.proof_model_client,
             system_message=system_message_proof,
             tools=[compile_fstar]
         )
 
-        self.refinement_agent = AssistantAgent(
-            name="fstar_refinement_agent",
-            model_client=self.refinement_model_client,
-            system_message=system_message_refinement,
-            tools=[compile_fstar]
-        )
+        # self.refinement_agent = AssistantAgent(
+        #     name="fstar_refinement_agent",
+        #     model_client=self.refinement_model_client,
+        #     system_message=system_message_refinement,
+        #     tools=[compile_fstar]
+        # )
+
+
+        selector_prompt = """Select an agent to perform task. If this is the first message, then the f* proof agent should start first and come up with a proof sketch. Afterwards the syntax agent will come in and turn the sketch into a real syntactically correct program
+
+        {roles}
+
+        Current conversation context:
+        {history}
+
+        Read the above conversation, then select an agent from {participants} to perform the next task.
+        When the task is complete, let the user approve or disapprove the task.
+        """
+
 
         # Create the agent team
         text_termination = TextMentionTermination("All verification conditions discharged successfully") # TODO: change termination message
-        self.team = RoundRobinGroupChat(
+        self.team = SelectorGroupChat(
             participants=[self.syntax_agent, self.proof_agent],
-            termination_condition=text_termination
+            termination_condition=text_termination,
+            selector_prompt=selector_prompt,
+            allow_repeated_speaker=True,
+            model_client=self.proof_model_client,
         )
+        
 
     def display_diff(self, original: str, modified: str) -> str:
         """
@@ -124,6 +146,6 @@ class Agent:
         assert isinstance(response.chat_message.content, str)
         return response.chat_message.content
 
-    def get_team(self) -> RoundRobinGroupChat:
+    def get_team(self) -> SelectorGroupChat:
         """Get the agent team for team-based chat"""
         return self.team

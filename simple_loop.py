@@ -122,25 +122,26 @@ def main() -> None:
         with st.chat_message("user"):
             print("User: ", prompt)
             st.markdown(prompt)
-        with st.spinner("🔎 Retrieving relevant information with GraphRAG..."):
-            # Create and run the event loop for GraphRAG query
-            #loop = get_or_create_eventloop()
-            #rag_output = "Summarize F* language syntax, guidelines and few-shot examples related to the following query:" + prompt
-            time.sleep(5)
-            with open("./temp_files/list_rag.md", "r") as f:
-                rag_output = f.read()
-            print("rag:", rag_output)
-        if rag_output:
-            st.success("✅ Retrieval successful ✅")
-            with st.expander("📚 Retrieved Context", expanded=True):
-                st.markdown("""
-                    <div style="
-                        background-color: #f0f2f6;
-                        padding: 10px;
-                        border-radius: 5px;">
-                        {}
-                    </div>
-                    """.format(rag_output), unsafe_allow_html=True)
+        # with st.spinner("🔎 Retrieving relevant information with GraphRAG..."):
+        #     # Create and run the event loop for GraphRAG query
+        #     #loop = get_or_create_eventloop()
+        #     #rag_output = "Summarize F* language syntax, guidelines and few-shot examples related to the following query:" + prompt
+        #     time.sleep(5)
+        #     with open("./temp_files/list_rag.md", "r") as f:
+        #         rag_output = f.read()
+        #     print("rag:", rag_output)
+        # if rag_output:
+        #     st.success("✅ Retrieval successful ✅")
+        #     with st.expander("📚 Retrieved Context", expanded=True):
+        #         st.markdown("""
+        #             <div style="
+        #                 background-color: #f0f2f6;
+        #                 padding: 10px;
+        #                 border-radius: 5px;">
+        #                 {}
+        #             </div>
+        #             """.format(rag_output), unsafe_allow_html=True)
+        rag_output = ""
         final_prompt = prompt + "\n\n Here is some relevant context which might be helpful, but incomplete for the task."+ rag_output
         print("Final:", final_prompt)
         # Get or create event loop and run async chat
