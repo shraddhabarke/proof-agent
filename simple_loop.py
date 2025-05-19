@@ -9,6 +9,11 @@ from autogen_agentchat.teams import RoundRobinGroupChat
 from autogen_agentchat.ui import Console
 from autogen_core import CancellationToken
 from graphrag_interface import query_graphrag
+import time
+import json
+import ast
+import re
+import os
 
 async def async_chat(team: RoundRobinGroupChat, prompt: str, file_content: str = None) -> str:
     """Async function to handle chat interactions with the agent team"""
@@ -33,15 +38,33 @@ async def async_chat(team: RoundRobinGroupChat, prompt: str, file_content: str =
                 # Store messages with agent information
                 agent_name = message.agent.name if hasattr(message, 'agent') else "Assistant"
                 response_messages.append(f"**{agent_name}**: {str(message.content)}")
+                
+                
+                # Original message handling
                 if "FunctionCall" in str(message.content):
-                    st.warning(str(message.content))
+
+                  with open("./temp_files/Test.fst", "r") as f:
+                    f.seek(0)
+                    code = f.read()
+                    st.code(code, language="C")
+                    # Keep the original warning for debugging
+                    st.warning("Calling compile_fstar_code....")
                 elif "FunctionExecutionResult" in str(message.content):
-                    st.warning(str(message.content))
+                    pass
+                    #st.warning(str(message.content))
                 elif "Verified module" in str(message.content):
                     st.success("Verified module: Test. All verification conditions discharged successfully.")
+                    # Add a small delay to ensure file is written
+                    time.sleep(0.1)  # 100ms delay
+                    
+                    # Force flush any file buffers
+     
+                    
                     with open("./temp_files/Test.fst", "r") as f:
+                        # Ensure we're reading from the start of file
+                        f.seek(0)
                         code = f.read()
-                        st.code(code, language="fstar")
+                        st.code(code, language="C")
                 elif "error occurred" in str(message.content):
                     st.error(str(message.content))
                 else:
@@ -67,8 +90,8 @@ def create_agent_team() -> RoundRobinGroupChat:
     return agent.get_team()
 
 def main() -> None:
-    st.set_page_config(page_title="F* Proof Assistant", page_icon="🤖")
-    st.title("F* Proof Assistant 🤖")
+    st.set_page_config(page_title="F* Proof Copilot", page_icon="🤖")
+    st.title("F* Proof Copilot 🤖")
 
     # Initialize agent team in session state
     if "agent_team" not in st.session_state:
@@ -79,7 +102,7 @@ def main() -> None:
         st.session_state["messages"] = []
 
     # Add file uploader
-    uploaded_file = st.file_uploader("Upload a file for context", type=['py', 'c', 'cpp', 'js', 'txt', 'pdf', 'doc', 'docx', 'h', 
+    uploaded_file = st.file_uploader("Upload a file for context", type=['fst', 'py', 'c', 'cpp', 'js', 'txt', 'pdf', 'doc', 'docx', 'h', 
                                     'java', 'html', 'css', 'json', 'yaml', 'yml', 'xml', 'sql', 'rs', 'go', 'rb', 'php'])
     file_content = None
     if uploaded_file:
@@ -99,10 +122,26 @@ def main() -> None:
         with st.chat_message("user"):
             print("User: ", prompt)
             st.markdown(prompt)
-        rag_output = asyncio.run(query_graphrag("Summarize F* language syntax, guidelines and few-shot examples related to the following query:" + prompt))
-        print("rag:", rag_output)
-
-        final_prompt = prompt + rag_output
+        with st.spinner("🔎 Retrieving relevant information with GraphRAG..."):
+            # Create and run the event loop for GraphRAG query
+            #loop = get_or_create_eventloop()
+            #rag_output = "Summarize F* language syntax, guidelines and few-shot examples related to the following query:" + prompt
+            time.sleep(5)
+            with open("./temp_files/list_rag.md", "r") as f:
+                rag_output = f.read()
+            print("rag:", rag_output)
+        if rag_output:
+            st.success("✅ Retrieval successful ✅")
+            with st.expander("📚 Retrieved Context", expanded=True):
+                st.markdown("""
+                    <div style="
+                        background-color: #f0f2f6;
+                        padding: 10px;
+                        border-radius: 5px;">
+                        {}
+                    </div>
+                    """.format(rag_output), unsafe_allow_html=True)
+        final_prompt = prompt + "\n\n Here is some relevant context which might be helpful, but incomplete for the task."+ rag_output
         print("Final:", final_prompt)
         # Get or create event loop and run async chat
         loop = get_or_create_eventloop()

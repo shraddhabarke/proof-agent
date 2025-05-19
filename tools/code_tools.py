@@ -4,8 +4,8 @@ from azure.identity import DefaultAzureCredential, ChainedTokenCredential, Azure
 import os
 from typing import Optional
 
-# def setup_azure_client(model: str = "gpt-4o_2024-05-13", model_family: str = "gpt4-o"):
-def setup_azure_client(model: str = "gpt-35-turbo_1106", model_family: str = "gpt-35-turbo"):
+def setup_azure_client(model: str = "gpt-4o_2024-05-13", model_family: str = "gpt4-o"):
+#def setup_azure_client(model: str = "gpt-35-turbo_1106", model_family: str = "gpt-35-turbo"):
 
     scope = "api://trapi/.default"
     credential = get_bearer_token_provider(ChainedTokenCredential(
@@ -35,8 +35,8 @@ def setup_azure_client(model: str = "gpt-35-turbo_1106", model_family: str = "gp
         azure_ad_token_provider=credential
     )
 
-def create_code_agent(model: str = "gpt-35-turbo_1106", 
-                     model_family: str = "gpt-35-turbo", 
+def create_code_agent(model: str = "gpt-4o_2024-05-13", 
+                     model_family: str = "gpt4-o", 
                      system_message: Optional[str] = None) -> AssistantAgent:
     client = setup_azure_client(model, model_family)
     return AssistantAgent(
