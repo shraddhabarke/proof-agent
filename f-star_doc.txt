@@ -1,0 +1,5339 @@
+F* is a dependently type programming language that aims to play
+several roles:
+
+- A general purpose programming language, which encourages
+higher-order functional programming with effects, in the tradition
+of the ML family of languages.
+
+- A compiler, which translates F* programs to OCaml or F#, and even C
+or Wasm, for execution.
+
+- A proof assistant, in which to state and prove properties of
+programs.
+
+- A program verification engine, leveraging SMT solvers to partially
+automate proofs of programs.
+
+- A metaprogramming system, supporting the programmatic construction
+of F* programs and proof automation procedures.
+
+To achieve these goals, the design of F* revolves around a few key
+elements, described below. Not all of this may make sense to
+you-that's okay, you'll learn about it as we go.
+
+- A core language of total functions with full dependent types,
+including an extensional form of type conversion, indexed inductive
+types, and pattern matching, recursive functions with semantic
+termination checking, dependent refinement types and subtyping, and
+polymorphism over a predicative hierarchy of universes.
+
+- A system of user-defined indexed effects, for modeling,
+encapsulating, and statically reasoning about various forms of
+computational effects, including a primitive notion of general
+recursion and divergence, as well as an open system of user-defined
+effects, with examples including state, exceptions, concurrency,
+algebraic effects, and several others.
+
+- A built-in encoding of a classical fragment of F*'s logic into the
+first order logic of an SMT solver, allowing many proofs to be
+automatically discharged.
+
+- A reflection within F* of the syntax and proof state of F*, enabling
+Meta-F* programs to manipulate F* syntax and proof goals and for
+users to build proofs interactively with tactics.
+
+In practice, rather than a single language, the F* ecosystem is also a
+collection of domain-specific languages (DSLs). A common use of F* is
+to embed within it programming languages at different levels of
+abstraction or for specific programming tasks, and for the embedded
+language to be engineered with domain-specific reasoning, proof
+automation, and compilation backends. Some examples include:
+
+- Low*, an shallowly embedded DSL for sequential programming against a
+C-like memory model including explicit memory management on the
+stack and heap; a Hoare logic for partial correctness based on
+implicit dynamic frames; and a custom backend (Karamel) to compile
+Low* programs to C for further compilation by off-the-shelf C
+compilers.
+
+- EverParse, a shallow embedding of a DSL (layered on top of the Low*
+DSL) of parser and serializer combinators, for low-level binary
+formats.
+
+- Vale, a deeply embedded DSL for structured programming in a
+user-defined assembly language, with a Hoare logic for total
+correctness, and a printer to emit verified programs in a assembly
+syntax compatible with various standard assemblers.
+
+- Steel, a shallow embedding of concurrency as an effect in F*, with
+an extensible concurrent separation logic for partial correctness as
+a core program logic, and proof automation built using a combination
+of Meta-F* tactics, higher-order unification, and SMT.
+
+- Pulse, a successor of Steel, a DSL with custom syntax and
+typechecking algorithm, providing proofs in a small but highly
+expressive core logic for mutable state and concurrency called
+PulseCore, formalized entirely in terms of pure and ghost functions
+in F*.
+
+To get a taste of F*, let's dive right in with some examples. At this
+stage, we don't expect you to understand these examples in detail,
+though it should give you a flavor of what is possible with F*.
+
+Dependently typed programming enables one to more precisely capture
+properties and invariants of a program using types. Here's a classic
+example: the type vec a n represents an n -dimensional vector
+of a -typed elements; or, more simply, a list of n values each
+of type a . Like other dependently typed languages, F* supports
+inductively defined definitions of types.
+
+type vec (a:Type) : nat -> Type =
+  | Nil : vec a 0
+  | Cons : #n:nat -> hd:a -> tl:vec a n -> vec a (n + 1)
+
+
+Operations on a vectors can be given types that describe their
+behavior in terms of vector lengths.
+
+For example, here's a recursive function append to concatenate two
+vectors. Its type shows that the resulting vector has a length that is
+the sum of the lengths of the input vectors.
+
+let rec append #a #n #m (v1:vec a n) (v2:vec a m)
+  : vec a (n + m)
+  = match v1 with
+    | Nil -> v2
+    | Cons hd tl -> Cons hd (append tl v2)
+
+
+Of course, once a function like append is defined, it can be used
+to define other operations and its type helps in proving further
+properties. For example, it's easy to show that reversing a vector
+does not change its length.
+
+let rec reverse #a #n (v:vec a n)
+  : vec a n
+  = match v with
+    | Nil -> Nil
+    | Cons hd tl -> append (reverse tl) (Cons hd Nil)
+
+
+Finally, to get an element from a vector, one can program a selector
+whose type also includes a refinement type to specify that the index i is less than the length of the vector.
+
+let rec get #a #n (i:nat{i < n}) (v:vec a n)
+  : a
+  = let Cons hd tl = v in
+    if i = 0 then hd
+    else get (i - 1) tl
+
+
+While examples like this can be programmed in other dependently typed
+languages, they can often be tedious, due to various technical
+restrictions. F* provides a core logic with a more flexible notion of
+equality to make programming and proving easier. For now, a takeaway
+is that dependently typed programming patterns that are quite
+technical in other languages are often
+fairly natural in F*. You'll learn more about this in a later
+chapter .
+
+While functional programming is at the heart of the language, F* is
+about more than just pure functions. In fact, F* is a Turing complete
+language. That this is even worth mentioning may come as a surprise to
+readers with a background in general-purpose programming languages
+like C# or Scala, but not all dependently typed languages are Turing
+complete, since nontermination can break soundness. However, F*
+supports general recursive functions and non-termination in a safe
+manner, without compromising soundness.
+
+Beyond nontermination, F* supports a system of user-defined
+computational effects which can be used to model a variety of
+programming idioms, including things like mutable state, exceptions,
+concurrency, IO, etc.
+
+Here below is some code in an F* dialect called Low*
+which provides a sequential, imperative C-like programming model with
+mutable memory. The function malloc_copy_free allocates an array dest , copies the contents of an array of bytes src into a dest , deallocates src and returns dest .
+
+let malloc_copy_free (len:uint32 { 0ul < len })
+                     (src:lbuffer len uint8)
+  : ST (lbuffer len uint8)
+       (requires fun h -> 
+         live h src /\
+         freeable src)
+       (ensures fun h0 dest h1 -> 
+         live h1 dest /\
+         (forall (j:uint32). j < len ==> get h0 src j == get h1 dest j))
+  = let dest = malloc 0uy len in
+    memcpy len 0ul src dest;
+    free src;
+    dest
+
+
+It'll take us until much later to explain this code in
+full detail, but here are two main points to take away:
+
+- The type signature of the procedure claims that under specific
+constraints on a caller, malloc_copy_free is safe to execute
+(e.g., it does not read outside the bounds of allocated memory)
+and that it is correct (i.e., that it successfully copies src to dest without modifying any other memory)
+
+- Given the implementation of a procedure, F* actually builds a
+mathematical proof that it is safe and correct with respect to its
+signature.
+
+While other program verifiers offer features similar to what we've
+used here, a notable thing about F* is that the semantics of programs
+with side effects (like reading and writing memory) is entirely
+encoded within F*'s logic using a system of user-defined effects.
+
+Whereas malloc_copy_free is programmed in Low* and specified using
+a particular kind of Floyd-Hoare logic , there's nothing really
+special about it in F*.
+
+Here, for example, is a concurrent program in another user-defined F*
+dialect called Steel. It increments two heap-allocated
+references in parallel and is specified for safety and correctness in concurrent separation logic , a different kind
+of Floyd-Hoare logic than the one we used for malloc_copy_free .
+
+let par_incr (#v0 #v1:erased int) (r0 r1:ref int)
+  : SteelT _ (pts_to r0 v0 `star` pts_to r1 v1)
+             (fun _ -> pts_to r0 (v0 + 1) `star` pts_to r1 (v1 + 1))
+  = par (incr r0) (incr r1)
+
+
+As an F* user, you can choose a programming model and a suite of
+program proof abstractions to match your needs. You'll learn more
+about this in the section on user-defined effects .
+
+Stating a theorem or lemma in F* amounts to declaring a type signature
+and a doing a proof corresponds to providing an implementation of that
+signature. Proving theorems can take a fair bit of work by a human and
+F* seeks to reduce that burden, using a variety of techniques.
+
+SMT Solving
+
+Proving even a simple program often involves proving dozens or
+hundreds of small facts, e.g., proving that bounded arithmetic doesn't
+overflow, or that ill-defined operations like divisions by zero never
+occur. All these little proofs can quickly overwhelm a user.
+
+The main workhorse for proofs in F* is an automated theorem prover,
+known as a Satisfiability Modulo Theories , or SMT, solver. The F*
+toolchain integrates the Z3 SMT Solver .
+
+By default, the F* typechecker collects all the facts that must be
+proven in a program and encodes them to the SMT solver, an engine that
+is capable of solving problems in various combinations of mathematical
+logics-F* encodes problems to Z3 in a combination of first-order
+logic, with uninterpreted functions and integer arithmetic.
+
+Z3 is remarkably effective at solving the kinds of problems that F*
+generates for it. The result is that some F* programs enjoy a high
+level of automation, e.g., in memcpy , we specified a pre- and
+postcondition and a loop invariant, and the system took care of all
+the remaining proofs.
+
+That said, Z3 cannot solve all problems that F* feeds to it. As such,
+F* offers several other mechanisms with varying levels of user
+control.
+
+Symbolic computation
+
+SMT solvers are great at proofs that involve equational rewriting, but
+many proofs can be done simply by computation. In fact, proofs by
+computation are a distinctive feature of many dependently typed
+languages and F* is no exception.
+
+As a very simple example, consider proving that pow2 12 == 4096 ,
+where pow2 is the recursive function shown below.
+
+let rec pow2 (n:nat) : nat =
+  if n = 0 then 1
+  else 2 * pow2 (n - 1)
+
+let proof_by_normalization ()
+  : Lemma (pow2 12 == 4096)
+  = normalize_term_spec (pow2 12)
+
+############################################
+Programming and Proving with Total Functions
+############################################
+
+The core design philosophy of F* is that the type of a term (a program
+fragment) is a specification of its runtime behavior. We write ``e :
+t`` to mean that a term ``e`` has type ``t``. Many terms can have the
+same type and the same term can have many types.
+
+One (naive but useful) mental model is to think of a type as
+describing a set of values. For instance, the type ``int`` describes
+the set of terms which compute integer results, i.e., when you have
+``e : int``, then when ``e`` is reduced fully it produces a value in
+the set ``{..., -2, -1, 0, 1, 2, ...}``. Similarly, the type ``bool``
+is the type of terms that compute or evaluate to one of the values in
+the set ``{true,false}``. Unlike many other languages, F* allows
+defining types that describe arbitrary sets of values, e.g., the type
+that contains only the number ``17``, or the type of functions that
+factor a number into its primes.
+
+When proving a program ``e`` correct, one starts by specifying the
+properties one is interested in as a type ``t`` and then trying to
+convince F* that ``e`` has type ``t``, i.e., deriving ``e : t``.
+
+The idea of using a type to specify properties of a program has deep
+roots in the connections between logic and computation. You may find
+it interesting to read about `propositions as types
+<https://cacm.acm.org/magazines/2015/12/194626-propositions-as-types/fulltext>`_,
+a concept with many deep mathematical and philosophical
+implications. For now, it suffices to think of a type ``t`` as a
+specification, or a statement of a theorem, and ``e : t`` as
+computer-checkable claim that the term ``e`` is a proof of the theorem
+``t``.
+
+Equality
+========
+
+Equality is a subtle issue that pervades the design of all dependent
+type theories, and F* is no exception. In this first chapter, we
+briefly touch upon two different kinds of equality in F*, providing
+some basic information sufficient for the simplest usages. In a
+:ref:`subsequent chapter <Part2_equality>`, we'll cover equality in
+much greater depth.
+
+Decidable equality and ``eqtype``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+We've implicitly used the equality operator ``=`` already (e.g., when
+defining ``factorial``). This is the *boolean* equality
+operator. Given two terms ``e₁ : t`` and ``e₂ : t``, so long as ``t``
+supports a notion of decidable equality, ``(e₁ = e₂) : bool``.
+
+To see why not all types support decidably equality, consider ``t`` to
+be a function type, like ``int -> int``. To decide if two functions
+``f₁, f₂ : int -> int`` are equal, we'd have to apply them to all the
+infinitely many integers and compare their results—clearly, this is
+not decidable.
+
+The type ``eqtype`` is the type of types that support decidably
+equality. That is, given ``e₁ : t`` and ``e₂ : t``, it is only
+permissible to compare ``e₁ = e₂`` if ``t : eqtype``.
+
+For any type definition, F* automatically computes whether or not that
+type is an ``eqtype``. We'll explain later exactly how F* decides
+whether or not a type is an ``eqtype``. Roughly, for F* has built-in
+knowledge that various primitive types like integers and booleans
+support decidable equality. When defining a new type, F* checks
+that all values of the new type are composed structurally of terms
+that support decidable equality. In particular, if an ``e : t`` may
+contain a sub-term that is a function, then ``t`` cannot be an
+``eqtype``.
+
+As such, the type of the decidable equality operator is
+
+.. code-block:: fstar
+
+   val ( = ) (#a:eqtype) (x:a) (y:a) : bool
+
+That is, ``x = y`` is well-typed only when ``x : a`` and ``y : a`` and
+``a : eqtype``.
+
+Propositional equality
+^^^^^^^^^^^^^^^^^^^^^^
+
+F* offers another notion of equality, propositional equality, written
+``==``. For *any type* ``t``, given terms ``e₁, e₂ : t``, the
+proposition ``e₁ == e₂`` asserts the (possibly undecidable) equality
+of ``e₁`` and ``e₂``. The type of the propositional equality operator
+is shown below:
+
+.. code-block:: fstar
+
+   val ( == ) (#a:Type) (x:a) (y:a) : prop
+
+Unlike decidable equality ``(=)``, propositional equality is defined
+for all types. The result type of ``(==)`` is ``prop``, the type of
+propositions. We'll learn more about that in the :ref:`next chapter
+<Part1_prop_assertions>`.
+
+Executing programs
+==================
+
+We've been through several chapters already, having learned many core
+concepts of F*, but we have yet to see how to compile and execute a
+program, since our focus so far has been on F*'s logic and how to
+prove properties about programs.
+
+F* offers several choices for executing a program, which we cover
+briefly here, using `Quicksort <../code/Part1.Quicksort.Generic.fst>`_
+as a running example.
+
+
+Interpreting F* programs
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+As mentioned in the :ref:`capsule summary
+<Part1_symbolic_computation>`, F* includes an engine (called the
+*normalizer*) that can symbolically reduce F* computations. We'll see
+many more uses of F*'s normalizer as we go, but one basic usage of it
+is to use it to interpret programs.
+
+Invoking the interpreter is easy using :ref:`fstar-mode.el
+<Part1_editors>` in emacs. In emacs, go to the F* menu, then to
+*Interactive queries*, then choose *Evaluate an expression* (or type
+C-c C-s C-e): this prompts you to enter an expression that you want to
+evaluate: type ``sort ( <= ) [4;3;2;1]`` and then press "Enter". You
+should see the following output: ``sort ( <= ) [4;3;2;1]``
+:math:`\downarrow\beta\delta\iota\zeta` ``[1; 2; 3; 4] <: Prims.Tot
+(list int)``, saying that the input term reduced to ``[1; 2; 3; 4]``
+of type ``Tot (list int)``.
+
+Producing an OCaml library
+..........................
+
+To extract OCaml code from a F* program use the command-line options,
+as shown below:
+
+.. code-block::
+
+   fstar --codegen OCaml --extract Part1.Quicksort --odir out Part1.Quicksort.Generic.fst
+
+* The ``--codegen`` option tells F* to produce OCaml code
+
+* The ``--extract`` option tells F* to only extract all modules in the given namespace, i.e., in this case, all modules in ``Part1.Quicksort``
+
+* The ``--odir`` option tells F* to put all the generated files into the specified directory; in this case ``out``
+  
+* The last argument is the source file to be checked and extracted
+
+Some points to note about the extracted code:
+
+* F* extracts only those definitions that correspond to executable
+  code. Lemmas and other proof-only aspects are erased. We'll learn
+  more about erasure in a later chapter.
+
+* The F* types are translated to OCaml types. Since F* types are more
+  precise than OCaml types, this translation process necessarily
+  involves a loss in precision. For example, the type of total orders
+  in ``Part1.Quicksort.Generic.fst`` is:
+
+  .. code-block:: fstar
+
+     let total_order_t (a:Type) = f:(a -> a -> bool) { total_order f }
+
+  Whereas in OCaml it becomes
+
+  .. code-block:: 
+
+     type 'a total_order_t = 'a -> 'a -> Prims.bool
+  
+
+  This means that you need to be careful when calling your extracted
+  F* program from unverified OCaml code, since the OCaml compiler will
+  not complain if you pass in some function that is not a total order
+  where the F* code expects a total order.
+
+Getting off the ground
+======================
+
+To start writing some F* programs, we'll need to learn some basics
+about the syntax of the language and some core concepts of types and
+functions.
+
+.. _Part1_editors:
+
+Text Editors
+^^^^^^^^^^^^
+
+F* can be used as a command line tool with any text editor. If you're
+viewing this in the interactive online tutorial, you can use the
+`Ace-based <https://ace.c9.io/>`_ text editor alongside, which
+provides some basic conveniences like syntax highlighting. However,
+beyond casual use, most users of F* rely on one of the follwing IDE
+plugins.
+
+  * `fstar-mode.el <https://github.com/FStarLang/fstar-mode.el>`_,
+    which provides several utilities for interactively editing and
+    checking F* files in emacs.
+
+  * `fstar-vscode-assistant
+    <https://github.com/FStarLang/fstar-vscode-assistant>`_, which
+    also provides interactive editing and checking support in VS Code.
+
+The main benefit to using these IDE plugins is that they allow you to
+incrementally check just the changing suffix of an F* file, rather
+than rechecking the entire file in batch mode. They also provide
+standard things like jumping to definitions, type of a symbol etc.
+
+Both these plugins rely on a generic but custom interaction protocol
+implemented by the F* compiler. It should be possible to implement IDE
+support similar to fstar-mode.el or fstar-vscode-assistant in your
+favorite plugin-capable editor.
+
+
+Basic syntactic structure
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+An F* program is a collection of modules, with each
+module represented by a single file with the filename extension
+``.fst``. Later, we'll see that a module's interface is in a separate
+``.fsti`` file and allows hiding details of a module's implementation
+from a client module.
+
+A module begins with the module's name (which must match the name of
+its file, i.e., ``module A`` is in ``A.fst``) and contains a sequence
+of top-level signatures and definitions. Module names always begin
+with a capital letter.
+
+* Signatures ascribe a type to a definition, e.g., ``val f : t``.
+
+Definitions come in several flavors: the two main forms we'll focus on
+when programming with total functions are
+
+* possibly recursive definitions (let bindings, ``let [rec] f = e``)
+* and, inductive type definitions (datatypes, ``type t = | D1 : t1 | ... | Dn : tn``)
+
+In later sections, we'll see two other kinds of definition:
+user-defined indexed effects and sub-effects.
+
+Comments
+^^^^^^^^
+
+Block comments are delimited by ``(*`` and ``*)``. Line comments begin
+with ``//``.
+
+.. code-block:: fstar
+
+  (* this is a
+     block comment *)
+
+
+  //This is a line comment
+
+
+Primitives
+^^^^^^^^^^
+
+Every F* program is checked in the context of some ambient primitive
+definitions taken from the core F* module ``Prims``.
+
+False
+.....
+
+The type ``False`` has no elements. Since there are no terms that
+satisfy ``e : False``, the type ``False`` is the type of unprovable
+propositions.
+
+Unit
+....
+
+The type ``unit`` has a single element denoted ``()``, i.e., ``() :
+unit``.
+
+Booleans
+........
+
+The type ``bool`` has two elements, ``true`` and ``false``. Note, the
+lowercase ``false`` is a boolean constant, distinct from the uppercase
+``False`` type.
+
+The following primitive boolean operators are available, in decreasing
+order of precedence.
+
+* ``not``: Boolean negation (unary, prefix)
+* ``&&``: Boolean conjunction (binary, infix)
+* ``||``: Boolean disjunction (binary, infix)
+
+Conditionals
+############
+
+You can, of course, branch on a boolean with ``if/then/else``
+
+.. code-block:: fstar
+
+  if b then 1 else 0
+
+  if b1 && b2 || b3
+  then 17
+  else 42
+
+
+Integers
+........
+
+The type ``int`` represents unbounded, primitive mathematical
+integers. Its elements are formed from the literals ``0, 1, 2, ...``,
+and the following primitive operators, in decreasing order of
+precedence.
+
+* ``-``: Unary negation (prefix)
+* ``-``: Subtraction (infix)
+* ``+``: Addition (infix)
+* ``/``: Euclidean division (infix)
+* ``%``: Euclidean modulus (infix)
+* ``op_Multiply``: Unfortunately, the traditional multiplication
+  symbol ``*`` is reserved by default for the tuple type
+  constructor. Use the module ``FStar.Mul`` to treat ``*`` as integer
+  multiplication.
+* ``<`` : Less than (infix)
+* ``<=``: Less than or equal (infix)
+* ``>`` : Greater than (infix)
+* ``>=``: Greater than or equal (infix)
+
+.. note::
+   
+    F* follows the OCaml style of no negative integer literals,
+    instead negate a positive integer like ``(- 1)``.
+    
+.. _Part1_ch1_boolean_refinements:
+
+Boolean refinement types
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+The F* core library, ``Prims``, defines the type of
+natural numbers as follows
+
+.. code-block:: fstar
+
+       let nat = x:int{x >= 0}
+
+This is an instance of a boolean refinement type, whose general form
+is ``x:t { e }`` where ``t`` is a type, and ``e`` is a ``bool``-typed term
+that may refer to the ``t``-typed bound variable ``x``. The term ``e``
+*refines* the type ``t``, in the sense that the set ``S`` denoted by ``t``
+is restricted to those elements ``x`` :math:`\in` ``S``  for which ``e`` evaluates to
+``true``.
+
+That is, the type ``nat`` describes the set of terms that evaluate to an
+element of the set ``{0, 1, 2, 3, ...}``.
+
+But, there's nothing particularly special about ``nat``. You can define
+arbitrary refinements of your choosing, e.g.,
+
+.. code-block:: fstar
+
+  let empty = x:int { false } //the empty set
+  let zero = x:int{ x = 0 } //the type containing one element `0`
+  let pos = x:int { x > 0 } //the positive numbers
+  let neg = x:int { x < 0 } //the negative numbers
+  let even = x:int { x % 2 = 0 } //the even numbers
+  let odd = x:int { x % 2 = 1 } //the odd numbers
+
+If you're coming from a language like C or Java where a type primarily
+describes some properties about the representation of data in memory,
+this view of types as describing arbitrary sets of values may feel a
+bit alien. But, let it sink in a bit---types that carve out precise
+sets of values will let you state and check invariants about your
+programs that may otherwise have only been implicit in your code.
+
+.. note::
+
+   Refinement types in F* trace their lineage to `F7
+   <https://www.microsoft.com/en-us/research/project/f7-refinement-types-for-f/>`_,
+   a language developed at Microsoft Research c. 2007 -- 2011. `Liquid
+   Haskell <https://ucsd-progsys.github.io/liquidhaskell-blog/>`_ is
+   another language with refinement types. Those languages provide
+   additional background and resources for learning about refinement
+   types.
+
+   Boolean refinements are a special case of a more powerful form of
+   propositional refinement type in F*. Refinement types, in
+   conjunction with dependent function types, are, in principle,
+   sufficient to encode many kinds of logics for program
+   correctness. However, refinement types are just one among several
+   tools in F* for program specification and proof.
+
+
+Refinement subtyping
+....................
+
+We have seen so far how to define a new refinement type, like ``nat`` or
+``even``. However, to make use of refinement types we need rules that
+allow us to:
+
+1. check that a program term has a given refinement type, e.g., to
+   check that ``0`` has type ``nat``. This is sometimes called
+   *introducing* a refinement type.
+
+2. make use of a term that has a refinement type, e.g., given ``x :
+   even`` we would like to be able to write ``x + 1``, treating ``x`` as an
+   ``int`` to add ``1`` to it. This is sometimes called *eliminating*
+   a refinement type.
+
+The technical mechanism in F* that supports both these features is
+called *refinement subtyping*.
+
+If you're used to a language like Java, C# or some other
+object-oriented language, you're familiar with the idea of
+subtyping. A type ``t`` is a subtype of ``s`` whenever a program term
+of type ``t`` can be safely treated as an ``s``. For example, in Java,
+all object types are subtypes of the type ``Object``, the base class
+of all objects.
+
+For boolean refinement types, the subtyping rules are as follows:
+
+* The type ``x:t { p }`` is a subtype of ``t``. That is, given ``e :
+  (x:t{p})``, it is always safe to *eliminate* the refinement and
+  consider ``e`` to also have type ``t``.
+
+* For a term ``e`` of type ``t`` (i.e., ``e : t``), ``t`` is a subtype
+  of the boolean refinement type ``x:t { p }`` whenever ``p[e / x]``
+  (``p[e/x]`` is notation for the term ``p`` with the variable ``x``
+  replaced by ``e``), is provably equal to ``true``. In other words,
+  to *introduce* ``e : t`` at the boolean refinement type ``x:t{ p
+  }``, it suffices to prove that the term ``p`` with ``e`` substituted
+  for bound variable ``x``, evaluates to ``true``.
+
+The elimination rule for refinement types (i.e., the first part above)
+is simple---with our intuition of types as sets, the refinement type
+``x:t{ p }`` *refines* the set corresponding to ``t`` by the predicate
+``p``, i.e., the ``x:t{ p }`` denotes a subset of ``t``, so, of course
+``x:t{ p }`` is a subtype of ``t``.
+
+The other direction is a bit more subtle: ``x:t{ p }`` is only a
+subtype of ``p``, for those terms ``e`` that validate ``p``. You're
+probably also wondering about how to prove that ``p[e/x]`` evaluates
+to ``true``---we will look at this in detail later. But, the short
+version is that F*, by default, uses an SMT solver to prove such fact,
+though you can also use tactics and other techniques to do so.
+
+An example
+..........
+
+Given ``x:even``, consider proving ``x + 1 : odd``; it takes a few
+steps:
+
+1. The operator ``+`` is defined in F*'s library. It expects both its
+   arguments to have type ``int`` and returns an ``int``.
+
+2. To prove that the first argument ``x:even`` is a valid argument for
+   ``+``, we use refinement subtyping to eliminate the refinement and
+   obtain ``x:int``. The second argument ``1:int`` already has the
+   required type. Thus, ``x + 1 : int``.
+
+3. To conclude that ``x + 1 : odd``, we need to introduce a refinement
+   type, by proving that the refinement predicate of ``odd`` evaluates
+   to true, i.e., ``x + 1 % 2 = 1``. This is provable by SMT, since we
+   started with the knowledge that ``x`` is even.
+
+As such, F* applies subtyping repeatedly to introduce and eliminate
+refinement types, applying it multiple times even to check a simple
+term like ``x + 1 : odd``.
+
+
+Functions
+^^^^^^^^^
+
+We need a way to define functions to start writing interesting
+programs. In the core of F*, functions behave like functions in
+maths. In other words, they are defined on their entire domain (i.e.,
+they are total functions and always return a result) and their only
+observable behavior is the result they return (i.e., they don't have
+any side effect, like looping forever, or printing a message etc.).
+
+Functions are first-class values in F*, e.g., they can be passed as
+arguments to other functions and returned as results. While F*
+provides several ways to define functions, the most basic form is the
+:math:`\lambda` term, also called a function literal, an anonymous function, or a
+simply a *lambda*. The syntax is largely inherited from OCaml, and
+this `OCaml tutorial
+<https://ocaml.org/learn/tutorials/basics.html#Defining-a-function>`_
+provides more details for those unfamiliar with the language. We'll
+assume a basic familiarity with OCaml-like syntax.
+
+Lambda terms
+............
+
+The term ``fun (x:int) -> x + 1`` defines a function,
+a lambda term, which adds 1 to its integer-typed parameter ``x``. You
+can also let F* infer the type of the parameter and write ``fun x ->
+x + 1`` instead.
+
+.. _Part1_ch1_named_function:
+
+Named functions
+...............
+
+Any term in F\* can be given a name using a ``let`` binding. We'll
+want this to define a function once and to call it many times. For
+example, all of the following are synonyms and bind the lambda term
+``fun x -> x + 1`` to the name ``incr``
+
+.. code-block:: fstar
+
+  let incr = fun (x:int) -> x + 1
+  let incr (x:int) = x + 1
+  let incr x = x + 1
+
+Functions can take several arguments and the result type of a function
+can also be annotated, if desired
+
+.. code-block:: fstar
+
+  let incr (x:int) : int = x + 1
+  let more_than_twice (x:int) (y:int) : bool = x > y + y
+
+It's considered good practice to annotate all the parameters and
+result type of a named function definition.
+
+.. note::
+
+   In addition to decorating the types of parameters and the results
+   of function, F* allows annotating any term ``e`` with its expected
+   type ``t`` by writing ``e <: t``. This is called a *type
+   ascription*. An ascription instructs F* to check that the
+   term ``e`` has the type ``t``. For example, we could have written
+
+.. code-block:: fstar
+
+     let incr = fun (x:int) -> (x + 1 <: int)
+
+
+Recursive functions
+...................
+
+Recursive functions in F* are always named. To define them, one uses
+the ``let rec`` syntax, as shown below.
+
+.. literalinclude:: ../code/Part1.GettingOffTheGround.fst
+   :language: fstar
+   :start-after: SNIPPET_START: factorial
+   :end-before: SNIPPET_END: factorial
+
+This syntax defines a function names ``factorial`` with a single
+parameter ``n:nat``, returning a ``nat``. The definition of factorial
+is allowed to use the ``factorial`` recursively—as we'll see in a
+later chapter, ensuring that the recursion is well-founded (i.e., all
+recursive calls terminate) is key to F*'s soundness. However, in this
+case, the proof of termination is automatic.
+
+.. note::
+
+   Notice the use of `open FStar.Mul` in the example above. This
+   brings the module `FStar.Mul` into scope and resolves the symbol
+   ``*`` to integer multiplication.
+
+F* also supports mutual recursion. We'll see that later.
+
+.. _Part1_ch1_arrows:
+
+Arrow types
+^^^^^^^^^^^
+
+Functions are the main abstraction facility of any functional language
+and their types are pervasive in F*. In its most basic form, function
+types, or arrows, have the shape::
+
+  x:t0 -> t1
+
+This is the type of a function that
+
+1. receives an argument ``e`` of type ``t0``, and
+
+2. always returns a value of type ``t1[e / x]``, i.e., the type of the
+   returned value depends on the argument ``e``.
+
+It's worth emphasizing how this differs from function types in other
+languages.
+
+* F*'s arrows are dependent---the type of the result depends on the
+  argument. For example, we can write a function that returns a
+  ``bool`` when applied to an even number and returns a ``string``
+  when applied to an odd number. Or, more commonly, a function
+  whose result is one greater than its argument.
+
+* In F*'s core language, all functions are total, i.e., a function
+  call always terminates after consuming a finite but unbounded amount
+  of resources.
+
+.. note::
+
+   That said, on any given computer, it is possible for a function
+   call to fail to return due to resource exhaustion, e.g., running
+   out of memory. Later, as we look at :ref:`effects <effects>`, we
+   will see that F* also supports writing non-terminating functions.
+
+
+.. _Part1_ch1_arrow_notations:
+
+
+Some examples and common notation
+.................................
+
+1. Functions are *curried*. Functions that take multiple arguments are
+   written as functions that take the first argument and return a
+   function that takes the next argument and so on. For instance, the
+   type of integer addition is::
+
+     val (+) : x:int -> y:int -> int
+
+2. Not all functions are dependent and the name of the argument can be
+   omitted when it is not needed. For example, here's a more concise
+   way to write the type of ``(+)``::
+
+     val (+) : int -> int -> int
+
+3. Function types can be mixed with refinement types. For instance,
+   here's the type of integer division---the refinement on the divisor
+   forbids division-by-zero errors::
+
+     val (/) : int -> (divisor:int { divisor <> 0 }) -> int
+
+4. Dependence between the arguments and the result type can be used to
+   state relationships among them. For instance, there are several
+   types for the function ``let incr = (fun (x:int) -> x + 1)``::
+
+     val incr : int -> int
+     val incr : x:int -> y:int{y > x}
+     val incr : x:int -> y:int{y = x + 1}
+
+   The first type ``int -> int`` is its traditional type in languages
+   like OCaml.
+
+   The second type ``x:int -> y:int{y > x}`` states that the returned
+   value ``y`` is greater than the argument ``x``.
+
+   The third type is the most precise: ``x:int -> y:int{y = x + 1}``
+   states that the result ``y`` is exactly the increment of the
+   argument ``x``.
+
+5. It's often convenient to add refinements on arguments in a
+   dependent function type. For instance::
+
+     val f : x:(x:int{ x >= 1 }) -> y:(y:int{ y > x }) -> z:int{ z > x + y }
+
+   Since this style is so common, and it is inconvenient to have to
+   bind two names for the parameters ``x`` and ``y``, F* allows (and
+   encourages) you to write::
+
+     val f : x:int{ x >= 1 } -> y:int{ y > x } -> z:int{ z > x + y }
+
+6. To emphasize that functions in F*'s core are total functions (i.e.,
+   they always return a result), we sometimes annotate the result type
+   with the effect label "``Tot``". This label is optional, but
+   especially as we learn about :ref:`effects <effects>`, emphasizing
+   that some functions have no effects via the ``Tot`` label is
+   useful. For example, one might sometimes write::
+
+     val f : x:int{ x >= 1 } -> y:int{ y > x } -> Tot (z:int{ z > x + y })
+
+   adding a ``Tot`` annotation on the last arrow, to indicate that the
+   function has no side effects. One could also write::
+
+     val f : x:int{ x >= 1 } -> Tot (y:int{ y > x } -> Tot (z:int{ z > x + y }))
+
+   adding an annotation on the intermediate arrow, though this is not
+   customary.
+
+Exercises
+^^^^^^^^^
+
+This first example is just to show you how to run the tool and
+interpret its output.
+
+.. literalinclude:: ../code/Part1.GettingOffTheGround.fst
+   :language: fstar
+   :start-after: SNIPPET_START: sample
+   :end-before: SNIPPET_END: sample
+
+Notice that the program begins with a ``module`` declaration. It
+contains a single definition named ``incr``. Definitions that appear
+at the scope of a module are called "top-level" definitions.
+
+Many types for ``incr``
+.......................
+
+Here are some types for ``incr``, including some types that are valid
+and some others that are not.
+
+This type claims that ``incr`` result is
+greater than its argument and F* agrees—remember, the ``int`` type is
+unbounded, so there's no danger of the addition overflowing.
+
+.. literalinclude:: ../code/Part1.GettingOffTheGround.fst
+   :language: fstar
+   :start-after: SNIPPET_START: ex1.1
+   :end-before: SNIPPET_END: ex1.1
+
+This type claims that ``incr`` always returns a natural number, but it
+isn't true, since incrementing a negative number doesn't always
+produce a non-negative number.
+
+.. literalinclude:: ../code/Part1.GettingOffTheGround.fst
+   :language: fstar
+   :start-after: SNIPPET_START: ex1.2
+   :end-before: SNIPPET_END: ex1.2
+
+F* produces the following error message::
+
+  Sample.fst(11,26-11,31): (Error 19) Subtyping check failed; expected type
+  Prims.nat; got type Prims.int; The SMT solver could not prove the query, try to
+  spell your proof in more detail or increase fuel/ifuel (see also prims.fst(626,
+  18-626,24))
+  Verified module: Sample
+  1 error was reported (see above)
+
+**Source location**
+
+The error message points to ``Sample.fst(11,26-11,31)``, a source
+range mentioned the file name, a starting position (line, column), and
+an ending position (line, column). In this case, it highlights the
+``x + 1`` term.
+
+**Severity and error code**
+
+The ``(Error 19)`` mentions a severity (i.e., ``Error``, as opposed
+to, say, ``Warning``), and an error code (``19``).
+
+**Error message**
+
+The first part of the message stated what you might expect::
+
+  Subtyping check failed; expected type Prims.nat; got type Prims.int
+
+The rest of the message provides more details, which we'll ignore for
+now, until we've had a chance to explain more about how F* interacts
+with the SMT solver. However, one part of the error message is worth
+pointing out now::
+
+  (see also prims.fst(626,18-626,24))
+
+Error messages sometimes mention an auxiliary source location in a
+"see also" parenthetical. This source location can provide some more
+information about why F* rejected a program—in this case, it points to
+the constraint ``x>=0`` in the definition of ``nat`` in ``prims.fst``,
+i.e., this is the particular constraint that F* was not able to prove.
+
+So, let's try again. Here's another type for ``incr``, claiming that
+if its argument is a natural number then so is its result. This time
+F* is happy.
+
+.. literalinclude:: ../code/Part1.GettingOffTheGround.fst
+   :language: fstar
+   :start-after: SNIPPET_START: ex1.3
+   :end-before: SNIPPET_END: ex1.3
+
+Sometimes, it is convenient to provide a type signature independently
+of a definition. Below, the ``val incr4`` provides only the signature
+and the subsequent ``let incr4`` provides the definition—F* checks
+that the definition is compatible with the signature.
+
+.. literalinclude:: ../code/Part1.GettingOffTheGround.fst
+   :language: fstar
+   :start-after: SNIPPET_START: ex1.4
+   :end-before: SNIPPET_END: ex1.4
+
+Try writing some more types for ``incr``.
+(`Load exercise <../code/exercises/Part1.GettingOffTheGround.fst>`_.)
+
+.. container:: toggle
+
+    .. container:: header
+
+       **Some answers**
+
+    .. literalinclude:: ../code/Part1.GettingOffTheGround.fst
+       :language: fstar
+       :start-after: SNIPPET_START: incr_types
+       :end-before: SNIPPET_END: incr_types
+
+
+Computing the maximum of two integers
+.....................................
+
+Provide an implementation of the following signature::
+
+  val max (x:int) (y:int) : int
+
+There are many possible implementations that satisfy this signature,
+including trivial ones like::
+
+  let max x y = 0
+
+Provide an implementation of ``max`` coupled with a type that is
+precise enough to rule out definitions that do not correctly return
+the maximum of ``x`` and ``y``.
+
+.. container:: toggle
+
+    .. container:: header
+
+       **Some answers**
+
+    .. literalinclude:: ../code/Part1.GettingOffTheGround.fst
+       :language: fstar
+       :start-after: SNIPPET_START: max
+       :end-before: SNIPPET_END: max
+
+
+More types for factorial
+........................
+
+Recall the definition of ``factorial`` from earlier.
+
+.. literalinclude:: ../code/Part1.GettingOffTheGround.fst
+   :language: fstar
+   :start-after: SNIPPET_START: factorial
+   :end-before: SNIPPET_END: factorial
+
+Can you write down some more types for factorial?
+
+.. container:: toggle
+
+    .. container:: header
+
+       **Some answers**
+
+    .. literalinclude:: ../code/Part1.GettingOffTheGround.fst
+       :language: fstar
+       :start-after: SNIPPET_START: factorial_answers
+       :end-before: SNIPPET_END: factorial_answers
+
+Fibonacci
+.........
+
+Here's a doubly recursive function:
+
+.. literalinclude:: ../code/Part1.GettingOffTheGround.fst
+   :language: fstar
+   :start-after: SNIPPET_START: fibonacci
+   :end-before: SNIPPET_END: fibonacci
+
+What other types can you give to it?
+
+.. container:: toggle
+
+    .. container:: header
+
+       **Some answers**
+
+    .. literalinclude:: ../code/Part1.GettingOffTheGround.fst
+       :language: fstar
+       :start-after: SNIPPET_START: fibonacci_answers
+       :end-before: SNIPPET_END: fibonacci_answers
+
+.. _Part1_ch3:
+
+Inductive types and pattern matching
+====================================
+
+In this chapter, you'll learn how to define new types in F*. These
+types are called *inductive types*, or, more informally,
+datatypes. We'll also learn how to define functions over these
+inductive types by pattern matching and to prove properties about
+them.
+
+.. note::
+
+   We'll only cover the most basic forms of inductive types here. In
+   particular, the types we show here will not make use of indexing or
+   any other form of dependent types---we'll leave that for a later
+   chapter.
+
+Enumerations
+^^^^^^^^^^^^
+
+We've seen that ``unit`` is the type with just one element ``()`` and
+that ``bool`` is the type with two elements, ``true`` and ``false``.
+
+You can define your own types with an enumeration of elements, like so.
+
+.. literalinclude:: ../code/Part1.Inductives.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: three
+   :end-before: //SNIPPET_END: three
+
+This introduces a new type ``three : Type``, and three *distinct*
+constants ``One_of_three : three``, ``Two_of_three : three``,
+``Three_of_three : three``. These constants are also called
+"constructors" or "data constructors". The name of a constructor must
+begin with an uppercase letter.
+
+.. note::
+
+   In this case, it may seem redundant to have to write the type of
+   each constructor repeatedly—of course they're all just constructors
+   of the type ``three``. In this case, F* will allow you to just
+   write
+
+   .. code-block:: fstar
+
+      type three =
+        | One_of_three
+        | Two_of_three
+        | Three_of_three
+
+   As we start to use indexed types, each constructor can build a
+   different instance of the defined type, so it will be important to
+   have a way to specify the result type of each constructor. For
+   uniformity, throughout this book, we'll always annotate the types
+   of constructors, even when not strictly necessary.
+
+F* can prove that they are distinct and that these are the only terms
+of type ``three``.
+
+.. literalinclude:: ../code/Part1.Inductives.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: assert
+   :end-before: //SNIPPET_END: assert
+
+To write functions that case analyze these new types, one uses the
+``match`` construct. The syntax of ``match`` in F* is very similar to
+OCaml or F#. We'll assume that you're familiar with its basics. As we
+go, we'll learn about more advanced ways to use ``match``.
+
+Here are some examples.
+
+.. literalinclude:: ../code/Part1.Inductives.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: disc_handrolled
+   :end-before: //SNIPPET_END: disc_handrolled
+
+Discriminators
+..............
+
+These functions test whether ``x : three`` matches a given
+constructor, returning a ``bool`` in each case. Since it's so common
+to write functions that test whether a value of an inductive type
+matches one of its constructors, F* automatically generates these
+functions for you. For example, instead of writing
+
+.. literalinclude:: ../code/Part1.Inductives.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: three_as_int
+   :end-before: //SNIPPET_END: three_as_int
+
+One can write:
+
+.. literalinclude:: ../code/Part1.Inductives.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: three_as_int'
+   :end-before: //SNIPPET_END: three_as_int'
+
+In other words, for every constructor ``T`` of an inductive type
+``t``, F* generates a function named ``T?`` (called a "discriminator")
+which tests if a ``v:t`` matches ``T``.
+
+Exhaustiveness
+..............
+
+Of course, an even more direct way of writing ``three_as_int`` is
+
+.. literalinclude:: ../code/Part1.Inductives.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: three_as_int''
+   :end-before: //SNIPPET_END: three_as_int''
+
+Every time you use a ``match``, F* will make sure to prove that you
+are handling all possible cases. Try omitting one of the cases in
+``three_as_int`` above and see what happens.
+
+Exhaustiveness checking in F* is a semantic check and can use the SMT
+solver to prove that all cases are handled appropriately. For example,
+you can write this:
+
+.. code-block:: fstar
+
+   let only_two_as_int (x:three { not (Three_of_three? x) })
+     : int
+     = match x with
+       | One_of_three -> 1
+       | Two_of_three -> 2
+
+The refinement on the argument allows F* to prove that the
+``Three_of_three`` case in the pattern is not required, since that
+branch would be unreachable anyway.
+
+.. _Part1_tuples:
+
+Tuples
+^^^^^^
+
+The next step from enumerations is to define composite types, e.g.,
+types that are made from pairs, triples, quadruples, etc. of other
+types. Here's how
+
+.. literalinclude:: ../code/Part1.Inductives.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: tup
+   :end-before: //SNIPPET_END: tup
+
+The type definition for ``tup2 a b`` states that for any types ``a :
+Type`` and ``b : Type``, ``Tup2 : a -> b -> tup2 a b``. That is,
+``Tup2`` is a constructor of ``tup2``, such that given ``x:a`` and
+``y:b``, ``Tup2 x y : tup2 a b``.
+
+The other types ``tup3`` and ``tup4`` are similar---the type
+annotations on the bound variables can be inferred.
+
+These are inductive types with just one case---so the discriminators
+``Tup2?``, ``Tup3?``, and ``Tup4?`` aren't particularly useful. But,
+we need a way to extract, or *project*, the components of a tuple. You
+can do that with a ``match``.
+
+.. literalinclude:: ../code/Part1.Inductives.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: proj_handrolled
+   :end-before: //SNIPPET_END: proj_handrolled
+
+Projectors
+..........
+
+These projectors are common enough that F* auto-generates them for
+you. In particular, for any data constructor ``T`` of type
+``x1:t1 -> ... -> xn:tn -> t``, F* auto-generates the following function:
+
+   * ``T?.xi : y:t{T? y} -> ti``
+
+That is, ``T?.xi`` is a function which when applied to a ``y:t`` in
+case ``T? y``, returns the ``xi`` component of ``T x1 ... xn``.
+
+In the case of our ``tup2`` and ``tup3`` types, we have
+
+   * ``Tup2?.fst``, ``Tup2?.snd``
+   * ``Tup3?.fst``, ``Tup3?.snd``, ``Tup3?.thd``
+
+Syntax for tuples
+.................
+
+Since tuples are so common, the module ``FStar.Pervasives.Native.fst``
+defines tuple types up to arity 14. So, you shouldn't have to define
+``tup2`` and ``tup3`` etc. by yourself.
+
+The tuple types in ``FStar.Pervasives.Native`` come with syntactic
+sugar.
+
+* You can write ``a & b`` instead of the ``tup2 a b``; ``a & b & c``
+  instead of ``tup3 a b c``; and so on, up to arity 14.
+
+* You can write ``x, y`` instead of ``Tup2 x y``; ``x, y, z`` instead
+  of ``Tup3 x y z``; an so on, up to arity 14.
+
+* You can write ``x._1``, ``x._2``, ``x._3``, etc. to project the
+  field ``i`` of a tuple whose arity is at least ``i``.
+
+That said, if you're using tuples beyond arity 4 or 5, it's probably a
+good idea to define a *record*, as we'll see next—since it can be hard
+to remember what the components of a large tuple represent.
+
+.. _Part1_records:
+
+Records
+.......
+
+A record is just a tuple with user-chosen names for its fields and
+with special syntax for constructing then and projecting their
+fields. Here's an example.
+
+.. literalinclude:: ../code/Part1.Inductives.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: point
+   :end-before: //SNIPPET_END: point
+
+* A record type is defined using curly braces ``{}``. See ``type
+  point3D``
+
+* A record value is also constructed using curly braces, with an
+  assignment for each field of the record. The fields need not be
+  given in order. See ``origin``.
+
+* To access the fields of a record, you can use the dot notation
+  ``p.x``; See ``dot``, which computes a dot product using dot
+  notation.
+
+* Records also support the ``with`` notation to construct a new record
+  whose fields are the same as the old record, except for those fields
+  mentioned after the ``with``. That is, ``translate_X p shift``
+  returns ``{ x = p.x + shift; y = p.y; z = p.z}``.
+
+* Records can also be used to pattern match a value. For example, in
+  ``is_origin``, we match the fields of the record (in any order)
+  against some patterns.
+
+Options
+^^^^^^^
+
+Another common type from F*'s standard library is the ``option`` type,
+which is useful to represent a possibly missing value.
+
+.. code-block::fstar
+
+   type option a =
+     | None : option a
+     | Some : a -> option a
+
+Consider implementing a function to divide ``x / y``, for two integers
+``x`` and ``y``. This function cannot be defined when ``y`` is zero,
+but it can be defined partially, by excluding the case where ``y =
+0``, as shown below. (Of course, one can also refine the domain of the
+function to forbid ``y = 0``, but we're just trying to illustrate the
+``option`` type here.)
+
+.. literalinclude:: ../code/Part1.Inductives.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: option
+   :end-before: //SNIPPET_END: option
+
+Like most other functional languages, F* does not have a ``null``
+value. Whenever a value may possibly be ``null``, one typically uses
+the ``option`` type, using ``None`` to signify null and ``Some v`` for
+the non-null case.
+
+Unions, or the ``either`` type
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+``FStar.Pervasives`` also defines the ``either`` type, shown below.
+
+.. code-block:: fstar
+
+   type either a b =
+     | Inl : v: a -> either a b
+     | Inr : v: b -> either a b
+
+The type ``either a b`` represents a value that could either be ``Inl
+v`` with ``v:a``, or ``Inr v`` with ``v:b``. That is, ``either a b``
+is a tagged union of the ``a`` and ``b``. It's easy to write functions
+to analyze the tag ``Inl`` (meaning it's "in the left case") or
+``Inr`` ("in the right case") and compute with the underlying
+values. Here's an example:
+
+.. literalinclude:: ../code/Part1.Inductives.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: either
+   :end-before: //SNIPPET_END: either
+
+The ``same_case x y`` function decides if the two unions are both
+simultaneously in the left or right case.
+
+Then, in ``sum x y``, with a refinement that ``x`` and ``y`` are in
+the same case, we can handle just two cases (when they are both in
+left, or both in right) and F* can prove that the case analysis is
+exhaustive. In the left case, the underlying values are boolean, so we
+combine them with ``||``; in the right case, the underlying values are
+integers, so we combine them with ``+``; and return them with the
+appropriate tag. The type of the result ``z:either bool int{ Inl? z <==>
+Inl? x}`` shows that the result has the same case as ``x`` (and hence
+also ``y``). We could have written the result type as ``z:either bool
+int { same_case z x }``.
+
+.. _Part1_inductives_list:
+
+Lists
+^^^^^
+
+All the types we've seen so far have been inductive only in a degenerate
+sense—the constructors do not refer to the types they construct. Now,
+for our first truly inductive type, a list.
+
+Here's the definition of ``list`` from ``Prims``:
+
+.. code-block:: fstar
+
+   type list a =
+     | Nil  : list a
+     | Cons : hd:a -> tl:list a -> list a
+
+The ``list`` type is available implicitly in all F* programs and we
+have special (but standard) syntax for the list constructors:
+
+* ``[]`` is ``Nil``
+* ``[v1; ...; vn]`` is ``Cons v1 ... (Cons vn Nil)``
+* ``hd :: tl`` is ``Cons hd tl``.
+
+You can always just write out the constructors like `Nil` and `Cons`
+explicitly, if you find that useful (e.g., to partially apply ``Cons
+hd : list a -> list a``).
+
+.. _Part1_inductives_length:
+
+Length of a list
+................
+
+Let's write some simple functions on lists, starting with computing
+the length of a list.
+
+.. literalinclude:: ../code/Part1.Inductives.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: length
+   :end-before: //SNIPPET_END: length
+
+The ``length`` function is recursive and implicitly polymorphic in a
+type ``a``. For any list ``l : list a``, ``length l`` returns a
+``nat``. The definition pattern matches on the list and calls
+``length`` recursively on the tail of list, until the ``[]`` case is
+reached.
+
+.. _Part1_inductives_append:
+
+Exercises
+^^^^^^^^^
+
+`Click here <../code/exercises/Part1.Inductives.fst>`_ for the exercise file.
+
+Here's the definition of ``append``, a function that concatenates two
+lists. Can you give it a type that proves it always returns a list
+whose length is the sum of the lengths of its arguments?
+
+.. literalinclude:: ../code/Part1.Inductives.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: def append
+   :end-before: //SNIPPET_END: def append
+
+.. container:: toggle
+
+    .. container:: header
+
+       **Answer**
+
+    .. literalinclude:: ../code/Part1.Inductives.fst
+       :language: fstar
+       :start-after: SNIPPET_START: sig append
+       :end-before: SNIPPET_END: sig append
+
+.. _Part1_lemmas:
+
+Lemmas and proofs by induction
+==============================
+
+Let's say you wrote the ``factorial`` function and gave it the type
+``nat -> nat``. Later, you care about some other property about
+``factorial``, e.g., that if ``x > 2`` then ``factorial x > x``. One
+option is to revise the type you wrote for ``factorial`` and get F\*
+to reprove that it has this type. But this isn't always feasible. What
+if you also wanted to prove that if ``x > 3`` then ``factorial x > 2 *
+x``. Clearly, polluting the type of ``factorial`` with all these
+properties that you may or may not care about is impractical.
+
+You could write assertions to ask F* to check these properties, e.g.,
+
+.. code-block:: fstar
+
+   let _ = assert (forall (x:nat). x > 2 ==> factorial x > 2)
+
+But, F* complains saying that it couldn't prove this fact. That's not
+because the fact isn't true—recall, checking the validity of
+assertions in F* is undecidable. So, there are facts that are true
+that F* may not be able to prove, at least not without some help.
+
+In this case, proving this property about ``factorial`` requires a
+proof by induction. F* and Z3 cannot do proofs by induction
+automatically—you will have to help F* here by writing a *lemma*.
+
+
+Introducing lemmas
+^^^^^^^^^^^^^^^^^^
+
+A lemma is a function in F* that always returns the ``():unit``
+value. However, the type of lemma carries useful information about
+which facts are provable.
+
+Here's our first lemma:
+
+.. literalinclude:: ../code/Part1.Lemmas.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: factorial_is_positive
+   :end-before: //SNIPPET_END: factorial_is_positive
+
+There's a lot of information condensed in that definition. Let's spell
+it out in detail:
+
+* ``factorial_is_positive`` is a recursive function with a parameter ``x:nat``
+
+* The return type of ``factorial_is_positive`` is a refinement of
+  unit, namely ``u:unit{factorial x > 0}``.  That says that the
+  function always returns ``()``, but, additionally, when
+  ``factorial_is_positive x`` returns (which it always does, since it
+  is a total function) it is safe to conclude that ``factorial x >
+  0``.
+
+* The next three lines prove the lemma using a proof by induction on
+  ``x``. The basic concept here is that by programming total
+  functions, we can write proofs about other pure expressions. We'll
+  discuss such proofs in detail in the remainder of this section.
+
+.. _Part1_lemma_syntax:
+
+Some syntactic shorthands for Lemmas
+....................................
+
+Lemmas are so common in F* that it's convenient to have special syntax
+for them. Here's another take at our proof by ``factorial x > 0``
+
+.. literalinclude:: ../code/Part1.Lemmas.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: factorial_is_positive_lemma
+   :end-before: //SNIPPET_END: factorial_is_positive_lemma
+
+The type ``x:t -> Lemma (requires pre) (ensures post)`` is the type of
+a function
+
+* that can be called with an argument ``v:t``
+* the argument must satisfies the precondition ``pre[v/x]``
+* the function always returns a ``unit``
+* and ensures that the postcondition ``post[v/x]`` is valid
+
+The type is equivalent to ``x:t{pre} -> u:unit{post}``.
+
+When the precondition ``pre`` is trivial, it can be omitted. One can
+just write:
+
+.. code-block:: fstar
+
+   Lemma (ensures post)
+
+or even
+
+.. code-block:: fstar
+
+   Lemma post
+
+
+A proof by induction, explained in detail
+.........................................
+
+Let's look at this lemma in detail again—why does it convince F* that
+``factorial x > 0``?
+
+.. literalinclude:: ../code/Part1.Lemmas.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: factorial_is_positive_lemma
+   :end-before: //SNIPPET_END: factorial_is_positive_lemma
+
+* It is a proof by induction on ``x``. Proofs by induction in F* are
+  represented by total recursive functions. The fact that it is total
+  is extremely important—it ensures that the inductive argument is
+  well-founded, i.e., that the induction hypothesis is only applied
+  correctly on strictly smaller arguments.
+
+* The base case of the induction is when ``x=0``. In this case, F* +
+  Z3 can easily prove that ``factorial 0 > 0``, since this just
+  requires computing ``factorial 0`` to ``1`` and checking ``1 > 0``.
+
+* What remains is the case where ``x > 0``.
+
+* In the inductive case, the type of the recursively bound
+  ``factorial_is_pos`` represents the induction hypothesis. In this
+  case, its type is
+
+  .. code-block:: fstar
+
+     y:int {y < x} -> Lemma (requires y >= 0) (ensures factorial y > 0)
+
+  In other words, the type of recursive function tells us that for all
+  ``y`` that are smaller than that current argument ``x`` and
+  non-negative , it is safe to assume that ``factorial y > 0``.
+
+* By making a recursive call on ``x-1``, F* can conclude that
+  ``factorial (x - 1) > 0``.
+
+* Finally, to prove that ``factorial x > 0``, the solver figures out
+  that ``factorial x = x * factorial (x - 1)``. From the recursive
+  lemma invocation, we know that ``factorial (x - 1) > 0``, and since
+  we're in the case where ``x > 0``, the solver can prove that the
+  product of two positive numbers must be positive.
+
+Exercises: Lemmas about integer functions
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+`Click here <../code/exercises/Part1.Lemmas.fst>`_ for the exercise file.
+
+Exercise 1
+..........
+
+Try proving the following lemmas about ``factorial``:
+
+.. code-block:: fstar
+
+   val factorial_is_greater_than_arg (x:int)
+     : Lemma (requires x > 2)
+             (ensures factorial x > x)
+
+.. container:: toggle
+
+    .. container:: header
+
+       **Answer**
+
+    .. literalinclude:: ../code/Part1.Lemmas.fst
+       :language: fstar
+       :start-after: SNIPPET_START: factorial_is_greater_than_arg
+       :end-before: SNIPPET_END: factorial_is_greater_than_arg
+
+
+Exercise 2
+..........
+
+Try proving the following lemmas about ``fibonacci``:
+
+.. literalinclude:: ../code/Part1.Lemmas.fst
+   :language: fstar
+   :start-after: SNIPPET_START: fibonacci_question
+   :end-before: SNIPPET_END: fibonacci_question
+
+.. container:: toggle
+
+    .. container:: header
+
+       **Answer** (Includes two proofs and detailed explanations)
+
+    .. literalinclude:: ../code/Part1.Lemmas.fst
+       :language: fstar
+       :start-after: SNIPPET_START: fibonacci_answer
+       :end-before: SNIPPET_END: fibonacci_answer
+
+
+    Let's have a look at that proof in some detail. It's much like the
+    proof by induction we discussed in detail earlier, except now we
+    have two uses of the induction hypothesis.
+
+    * It's a proof by induction on ``n:nat{n >= 2}``, as you can tell from the
+      ``let rec``.
+
+    * The base cases are when ``n = 2`` and ``n = 3``. In both these
+      cases, the solver can simply compute ``fibonacci n`` and check
+      that it is greater than ``n``.
+
+    * Otherwise, in the inductive case, we have ``n >= 4`` and the
+      induction hypothesis is the type of the recursive function::
+
+        m:nat{m >= 2 /\ m < n} -> Lemma (fibonacci m >= m)
+
+    * We call the induction hypothesis twice and get::
+
+        fibonacci (n - 1) >= n - 1
+        fibonacci (n - 2) >= n - 2
+
+    * To conclude, we show::
+
+        fibonacci n = //by definition
+        fibonacci (n - 1) + fibonacci (n - 2) >= //from the facts above
+        (n - 1) + (n - 2) = //rearrange
+        2*n - 3 >=  //when n >= 4
+        n
+
+    As you can see, once you set up the induction, the SMT solver does
+    a lot of the work.
+
+    Sometimes, the SMT solver can even find proofs that you might not
+    write yourself. Consider this alternative proof of ``fibonacci n
+    >= n``.
+
+    .. literalinclude:: ../code/Part1.Lemmas.fst
+       :language: fstar
+       :start-after: SNIPPET_START: fibonacci_answer_alt
+       :end-before: SNIPPET_END: fibonacci_answer_alt
+
+    This proof works with just a single use of the induction
+    hypothesis. How come? Let's look at it in detail.
+
+    1. It's a proof by induction on ``n:nat{n >= 2}``.
+
+    2. The base case is when ``n=2``. It's easy to compute ``fibonacci 2``
+       and check that it's greater than or equal to 2.
+
+    3. In the inductive case, we have::
+
+        n >= 3
+
+    4. The induction hypothesis is::
+
+         m:nat{m >= 2 /\ m < n} -> Lemma (fibonacci m >= m)
+
+    5. We apply the induction hypothesis to ``n - 1`` and get ::
+
+        fibonacci (n - 1) >= n - 1
+
+    6. We have::
+
+        fibonacci n = //definition
+        fibonacci (n - 1) + fibonacci (n - 2) >= //from 5
+        (n - 1) + fibonacci (n - 2)
+
+    7. So, our goal is now::
+
+        (n - 1) + fibonacci (n - 2) >= n
+
+    8. It suffices if we can show ``fibonacci (n - 2) >= 1``
+
+    9. From (2) and the definition of ``fibonacci`` we have::
+
+         fibonacci (n - 1) = //definition
+         fibonacci (n - 2) + fibonacci (n - 3) >= //from 5
+         n - 1 >= // from 3
+         2
+
+
+    10. Now, suppose for contradiction, that ``fibonacci (n - 2) = 0``.
+
+        10.1. Then, from step 9, we have ``fibonacci (n-3) >= 2``
+
+        10.2  If ``n=3``, then ``fibonacci 0 = 1``, so we have a contradiction.
+
+        10.3  If ``n > 3``, then
+
+           10.3.1. ``fibonacci (n-2) = fibonacci (n-3) + fibonacci (n-4)``, by definition
+
+           10.3.2. ``fibonacci (n-3) + fibonacci (n-4) >= fibonacci (n-3)``, since ``fibonacci (n-4) : nat``.
+
+           10.3.3. ``fibonacci (n-2) >= fibonacci (n-3)``, using 10.3.1 and 10.3.2
+
+           10.3.4. ``fibonacci (n-2) >= 2``, using 10.1
+
+           10.3.5. But, 10.3.4 contradicts 10; so the proof is complete.
+
+    You probably wouldn't have come up with this proof yourself, and
+    indeed, it took us some puzzling to figure out how the SMT solver
+    was able to prove this lemma with just one use of the induction
+    hypothesis. But, there you have it. All of which is to say that
+    the SMT solver is quite powerful!
+
+Exercise: A lemma about append
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+:ref:`Earlier <Part1_inductives_append>`, we saw a definition of
+``append`` with the following type:
+
+.. code-block:: fstar
+
+  val append (#a:Type) (l1 l2:list a)
+    : l:list a{length l = length l1 + length l2}
+
+Now, suppose we were to define `app``, a version of ``append`` with a
+weaker type, as shown below.
+
+.. literalinclude:: ../code/Part1.Lemmas.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: def append alt
+   :end-before: //SNIPPET_END: def append alt
+
+Can you prove the following lemma?
+
+.. literalinclude:: ../code/Part1.Lemmas.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: sig app_length
+   :end-before: //SNIPPET_END: sig app_length
+
+.. container:: toggle
+
+    .. container:: header
+
+       **Answer**
+
+    .. literalinclude:: ../code/Part1.Lemmas.fst
+       :language: fstar
+       :start-after: SNIPPET_START: def app_length
+       :end-before: SNIPPET_END: def app_length
+
+.. _Part1_intrinsic_extrinsic:
+
+Intrinsic vs extrinsic proofs
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+As the previous exercise illustrates, you can prove properties either
+by enriching the type of a function or by writing a separate lemma
+about it---we call these the 'intrinsic' and 'extrinsic' styles,
+respectively. Which style to prefer is a matter of taste and
+convenience: generally useful properties are often good candidates for
+intrinsic specification (e.g, that ``length`` returns a ``nat``); more
+specific properties are better stated and proven as lemmas. However,
+in some cases, as in the following example, it may be impossible to
+prove a property of a function directly in its type---you must resort
+to a lemma.
+
+.. literalinclude:: ../code/Part1.Lemmas.fst
+   :language: fstar
+   :start-after: SNIPPET_START: reverse
+   :end-before: SNIPPET_END: reverse
+
+Let's try proving that reversing a list twice is the identity
+function.  It's possible to *specify* this property in the type of
+``reverse`` using a refinement type.
+
+.. code-block:: fstar
+
+   val reverse (#a:Type) : f:(list a -> list a){forall l. l == f (f l)}
+
+.. note::
+
+   A subtle point: the refinement on ``reverse`` above uses a
+   :ref:`propositional equality
+   <Part1_ch2_propositional_equality>`. That's because equality on
+   lists of arbitrary types is not decidable, e.g., consider ``list
+   (int -> int)``.  All the proofs below will rely on propositional
+   equality.
+
+However, F* refuses to accept this as a valid type for ``reverse``:
+proving this property requires two separate inductions, neither of
+which F* can perform automatically.
+
+Instead, one can use two lemmas to prove the property we care
+about. Here it is:
+
+.. literalinclude:: ../code/Part1.Lemmas.fst
+   :language: fstar
+   :start-after: SNIPPET_START: reverse_involutive
+   :end-before: SNIPPET_END: reverse_involutive
+
+In the ``hd :: tl`` case of ``rev_involutive`` we are explicitly
+applying not just the induction hypothesis but also the ``snoc_cons``
+auxiliary lemma also proven there.
+
+Exercises: Reverse is injective
+...............................
+
+`Click here <../code/exercises/Part1.Lemmas.fst>`_ for the exercise file.
+
+Prove that reverse is injective, i.e., prove the following lemma.
+
+.. literalinclude:: ../code/Part1.Lemmas.fst
+   :language: fstar
+   :start-after: SNIPPET_START: sig rev_injective
+   :end-before: SNIPPET_END: sig rev_injective
+
+.. container:: toggle
+
+    .. container:: header
+
+       **Answer**
+
+    .. literalinclude:: ../code/Part1.Lemmas.fst
+       :language: fstar
+       :start-after: SNIPPET_START: def rev_injective
+       :end-before: SNIPPET_END: def rev_injective
+
+    That's quite a tedious proof, isn't it. Here's a simpler proof.
+
+    .. literalinclude:: ../code/Part1.Lemmas.fst
+       :language: fstar
+       :start-after: SNIPPET_START: rev_injective_alt
+       :end-before: SNIPPET_END: rev_injective_alt
+
+    The ``rev_injective_alt`` proof is based on the idea that every
+    invertible function is injective. We've already proven that
+    ``reverse`` is involutive, i.e., it is its own inverse. So, we
+    invoke our lemma, once for ``l1`` and once for ``l2``.  This gives
+    to the SMT solver the information that ``reverse (reverse l1) =
+    l1`` and ``reverse (reverse l2) = l2``, which suffices to complete
+    the proof. As usual, when structuring proofs, lemmas are your
+    friends!
+
+Exercise: Optimizing reverse
+............................
+
+Earlier, we saw how to implement :ref:`a tail-recursive variant
+<Part1_termination_reverse>` of ``reverse``.
+
+.. literalinclude:: ../code/Part1.Termination.fst
+       :language: fstar
+       :start-after: SNIPPET_START: rev
+       :end-before: SNIPPET_END: rev
+
+Prove the following lemma to show that it is equivalent to the
+previous non-tail-recursive implementation, i.e.,
+
+.. code-block:: fstar
+
+   val rev_is_ok (#a:_) (l:list a) : Lemma (rev [] l == reverse l)
+
+.. container:: toggle
+
+    .. container:: header
+
+       **Answer**
+
+    .. literalinclude:: ../code/Part1.Lemmas.fst
+       :language: fstar
+       :start-after: SNIPPET_START: rev_is_ok
+       :end-before: SNIPPET_END: rev_is_ok
+
+Exercise: Optimizing Fibonacci
+..............................
+
+
+Earlier, we saw how to implement :ref:`a tail-recursive variant
+<Part1_termination_fibonacci>` of ``fibonacci``---we show it again below.
+
+.. literalinclude:: ../code/Part1.Lemmas.fst
+       :language: fstar
+       :start-after: SNIPPET_START: fib_tail$
+       :end-before: SNIPPET_END: fib_tail$
+
+Prove the following lemma to show that it is equivalent to the
+non-tail-recursive implementation, i.e.,
+
+.. literalinclude:: ../code/Part1.Lemmas.fst
+       :language: fstar
+       :start-after: SNIPPET_START: val fib_tail_is_ok$
+       :end-before: SNIPPET_END: val fib_tail_is_ok$                     
+
+.. container:: toggle
+
+    .. container:: header
+
+       **Answer**
+
+    .. literalinclude:: ../code/Part1.Lemmas.fst
+       :language: fstar
+       :start-after: SNIPPET_START: fib_is_ok$
+       :end-before: SNIPPET_END: fib_is_ok$
+
+.. _Part1_higher_order_functions:
+
+Higher-order functions
+^^^^^^^^^^^^^^^^^^^^^^^
+
+Functions are first-class values—they can be passed to other functions
+and returned as results. We've already seen some examples in the
+section on :ref:`polymorphism
+<Part1_polymorphism_and_inference>`. Here are some more, starting with
+the ``map`` function on lists.
+
+.. literalinclude:: ../code/Part1.Lemmas.fst
+   :language: fstar
+   :start-after: SNIPPET_START: map
+   :end-before: SNIPPET_END: map
+
+It takes a function ``f`` and a list ``l`` and it applies ``f`` to
+each element in ``l`` producing a new list. More precisely ``map f
+[v1; ...; vn]`` produces the list ``[f v1; ...; f vn]``. For example:
+
+.. code-block:: fstar
+
+   map (fun x -> x + 1) [0; 1; 2] = [1; 2; 3]
+
+
+Exercise: Finding a list element
+................................
+
+Here's a function called ``find`` that given a boolean function ``f``
+and a list ``l`` returns the first element in ``l`` for which ``f``
+holds. If no element is found ``find`` returns ``None``.
+
+.. literalinclude:: ../code/Part1.Lemmas.fst
+   :language: fstar
+   :start-after: SNIPPET_START: find
+   :end-before: SNIPPET_END: find
+
+Prove that if ``find`` returns ``Some x`` then ``f x = true``. Is it
+better to do this intrinsically or extrinsically? Do it both ways.
+
+.. container:: toggle
+
+    .. container:: header
+
+       **Answer**
+
+    .. literalinclude:: ../code/Part1.Lemmas.fst
+       :language: fstar
+       :start-after: SNIPPET_START: sig find
+       :end-before: SNIPPET_END: sig find
+
+    .. literalinclude:: ../code/Part1.Lemmas.fst
+       :language: fstar
+       :start-after: SNIPPET_START: find_alt
+       :end-before: SNIPPET_END: find_alt
+
+Exercise: fold_left
+...................
+
+Here is a function ``fold_left``, where::
+
+   fold_left f [b1; ...; bn] a = f (bn, ... (f b2 (f b1 a)))
+
+.. literalinclude:: ../code/Part1.Lemmas.fst
+   :language: fstar
+   :start-after: SNIPPET_START: def fold_left
+   :end-before: SNIPPET_END: def fold_left
+
+Prove the following lemma:
+
+.. literalinclude:: ../code/Part1.Lemmas.fst
+   :language: fstar
+   :start-after: SNIPPET_START: sig fold_left_Cons_is_rev
+   :end-before: SNIPPET_END: sig fold_left_Cons_is_rev
+
+.. container:: toggle
+
+    .. container:: header
+
+       Hint: This proof is a level harder from what we've done so far.
+             You will need to strengthen the induction hypothesis, and
+             possibly to prove that ``append`` is associative and that
+             ``append l [] == l``.
+
+       **Answer**
+
+    .. literalinclude:: ../code/Part1.Lemmas.fst
+       :language: fstar
+       :start-after: SNIPPET_START: fold_left_Cons_is_rev
+       :end-before: SNIPPET_END: fold_left_Cons_is_rev
+
+.. _Part1_polymorphism_and_inference:
+
+Polymorphism and type inference
+===============================
+
+In this chapter, we'll learn about defining type polymorphic
+functions, or how to work with generic types.
+
+.. _Part1_type_of_types:
+
+Type: The type of types
+^^^^^^^^^^^^^^^^^^^^^^^
+
+One characteristic of F* (and many other dependently typed languages)
+is that it treats programs and their types uniformly, all within a
+single syntactic class. A type system in this style is sometimes
+called a *Pure Type System* or `PTS
+<https://en.wikipedia.org/wiki/Pure_type_system>`_.
+
+In F* (as in other PTSs) types have types too, functions can take
+types as arguments and return types as results, etc. In particular,
+the type of a type is ``Type``, e.g., ``bool : Type``, ``int : Type``,
+``int -> int : Type`` etc. In fact, even ``Type`` has a type---as
+we'll see when we learn about *universes*.
+
+Parametric polymorphism or generics
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Most modern typed languages provide a way to write programs with
+generic types. For instance, C# and Java provide generics, C++ has
+templates, and languages like OCaml and Haskell have several kinds of
+polymorphic types.
+
+In F*, writing functions that are generic or polymorphic in types
+arises naturally as a special case of the :ref:`arrow types
+<Part1_ch1_arrows>` that we have already learned about. For example,
+here's a polymorphic identity function::
+
+  let id : a:Type -> a -> a = fun a x -> x
+
+There are a several things to note here:
+
+* The type of ``id`` is an arrow type, with two arguments. The first
+  argument is ``a : Type``; the second argument is a term of type
+  ``a``; and the result also has the same type ``a``.
+
+* The definition of ``id`` is a lambda term with two arguments ``a :
+  Type`` (corresponding to the first argument type) and ``x : a``. The
+  function returns ``x``---it's an identity function on the second
+  argument.
+
+Just as with any function, you can write it instead like this:
+
+.. literalinclude:: ../code/Part1.Poly.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: id
+   :end-before: //SNIPPET_END: id
+
+To call ``id``, one can apply it first to a type and then to a value of that type, as shown below.
+
+.. literalinclude:: ../code/Part1.Poly.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: id applications
+   :end-before: //SNIPPET_END: id applications
+
+We've defined a function that can be applied to a value ``x:a`` for
+any type ``a``. The last line there maybe requires a second read: we
+instantiated ``id`` to ``int -> int`` and then applied it to ``id``
+instantiated to ``int``.
+
+Exercises
+^^^^^^^^^
+
+Let's try a few simple exercises. `Click here
+<../code/exercises/Part1.Poly.fst>`_ for the exercise file.
+
+
+Try defining functions with the following signatures:
+
+.. literalinclude:: ../code/Part1.Poly.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: sig apply_and_compose
+   :end-before: //SNIPPET_END: sig apply_and_compose
+
+.. container:: toggle
+
+    .. container:: header
+
+       **Answer**
+
+    .. literalinclude:: ../code/Part1.Poly.fst
+       :language: fstar
+       :start-after: //SNIPPET_START: apply_and_compose
+       :end-before: //SNIPPET_END: apply_and_compose
+
+How about writing down a signature for ``twice``:
+
+.. literalinclude:: ../code/Part1.Poly.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: def twice
+   :end-before: //SNIPPET_END: def twice
+
+.. container:: toggle
+
+    .. container:: header
+
+       **Answer**
+
+    .. literalinclude:: ../code/Part1.Poly.fst
+       :language: fstar
+       :start-after: SNIPPET_START: sig twice
+       :end-before: SNIPPET_END: sig twice
+
+It's quite tedious to have to explicitly provide that first type
+argument to ``id``. Implicit arguments and type inference will help,
+as we'll see, next.
+
+
+Type inference: Basics
+^^^^^^^^^^^^^^^^^^^^^^
+.. _inference:
+
+Like many other languages in the tradition of
+`Milner's ML <https://en.wikipedia.org/wiki/ML_%28programming_language%29>`_,
+type inference is a central component in F*'s design.
+
+You may be used to type inference in other languages, where one can
+leave out type annotations (e.g., on variables, or when using
+type-polymorphic (aka generic) functions) and the compiler determines
+an appropriate type based on the surrounding program context. F*'s
+type inference includes such a feature, but is considerably more
+powerful. Like in other dependently typed language, F*'s inference
+engine is based on `higher-order unification
+<https://en.wikipedia.org/wiki/Unification_(computer_science)#Higher-order_unification>`_
+and can be used to infer arbitrary fragments of program text, not just
+type annotations on variables.
+
+Let's consider our simple example of the definition and use of the
+identity function again
+
+.. literalinclude:: ../code/Part1.Poly.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: id
+   :end-before: //SNIPPET_END: id
+
+.. literalinclude:: ../code/Part1.Poly.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: id applications
+   :end-before: //SNIPPET_END: id applications
+
+Instead of explicitly providing that first type argument when applying
+``id``, one could write it as follows, replacing the type arguments
+with an underscore ``_``.
+
+.. literalinclude:: ../code/Part1.Poly.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: implicit id applications
+   :end-before: //SNIPPET_END: implicit id applications
+
+The underscore symbols is a wildcard, or a hole in program, and it's
+the job of the F* typechecker to fill in the hole.
+
+.. note::
+
+   Program holes are a very powerful concept and form the basis of
+   Meta-F*, the metaprogramming and tactics framework embedded in
+   F*---we'll see more about holes in a later section.
+
+Implicit arguments
+^^^^^^^^^^^^^^^^^^
+
+Since it's tedious to write an ``_`` everywhere, F* has a notion of
+*implicit arguments*. That is, when defining a function, one can add
+annotations to indicate that certain arguments can be omitted at call
+sites and left for the typechecker to infer automatically.
+
+For example, one could write
+
+.. literalinclude:: ../code/Part1.Poly2.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: id
+   :end-before: //SNIPPET_END: id
+
+decorating the first argument ``a`` with a ``#``, to indicate that it is
+an implicit argument. Then at call sites, one can simply write:
+
+.. literalinclude:: ../code/Part1.Poly2.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: id applications
+   :end-before: //SNIPPET_END: id applications
+
+
+And F* will figure out instantiations for the missing first argument
+to ``id``.
+
+In some cases, it may be useful to actually provide an implicit
+argument explicitly, rather than relying on the F* to pick one. For
+example, one could write the following:
+
+.. literalinclude:: ../code/Part1.Poly2.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: explicit id applications
+   :end-before: //SNIPPET_END: explicit id applications
+
+In each case, we provide the first argument of ``id`` explicitly, by
+preceding it with a ``#`` sign, which instructs F* to take the user's
+term rather than generating a hole and trying to fill it.
+
+.. _Part1_prop_assertions:
+
+Interfacing with an SMT solver
+==============================
+
+As mentioned :ref:`at the start of this section <Part1>`, a type ``t``
+represents a proposition and a term ``e : t`` is a proof of ``t``. In
+many other dependently typed languages, exhibiting a term ``e : t`` is
+the only way to prove that ``t`` is valid. In F*, while one can do
+such proofs, it is not the only way to prove a theorem.
+
+By way of illustration, let's think about :ref:`Boolean refinement
+types <Part1_ch1_boolean_refinements>`. As we've seen already, it is
+easy to prove ``17 : x:int{x >= 0}`` in F*. Under the covers, F*
+proves that ``(x >= 0) [17/x]`` reduces to ``true``, yet no explicit
+term is given to prove this fact. Instead, F* encodes facts about a
+program (including things like the semantics of arithmetic operators
+like ``>=``) in the classical logic of an SMT solver and asks it (Z3
+typically) to prove whether the formula ``17 >= 0`` is valid in a
+context including all encoded facts about a program. If Z3 is able to
+prove it valid, F* accepts the formula as true, without ever
+constructing a term representing a proof of ``17 >= 0``.
+
+This design has many important consequences, including, briefly:
+
+* Trust: F* implicitly trusts its encoding to SMT logic and the
+  correctness of the Z3 solver.
+  
+* Proof irrelevance: Since no proof term is constructed for proofs
+  done by SMT, a program cannot distinguish between different proofs
+  of a fact proven by SMT.
+
+* Subtyping: Since no proof term is constructed, a term like ``17``
+  can have many types, ``int``, ``nat``, ``x:int{x = 17}``, etc. As
+  mentioned :ref:`earlier <Part1_ch1_boolean_refinements>`, F*
+  leverages this to support refinement subtyping.
+
+* Undecidability: Since Z3 can check the validity of formulas in the
+  entirety of its logic, including things like quantifying universally
+  and existentially over infinite ranges, F* does not restrict the the
+  formulas checked for validity by Z3 to be boolean, or even
+  decidable. Yes, typechecking in F* is undecidable.
+
+In this chapter, we'll learn about the the classical logic parts of
+F*, i.e., the parts that allow it to interface with an SMT solver.
+
+.. note::
+
+   The beginning of this chapter is a little technical, even though
+   we're not telling the full story behind F*'s classical logic
+   yet. If parts of it are hard to understand right now, here's what
+   you need to know to before you :ref:`jump ahead
+   <Part1_ch2_assertions>`.
+
+   F* let's you write quantified formulas, called propositions, like
+   so
+
+   .. code-block:: fstar
+
+     forall (x1:t1) ... (xn:tn). p
+     exists (x1:t1) ... (xn:tn). p     
+
+   You can build propositions from booleans and conjunctions,
+   disjunctions, negations, implications, and bi-implications:
+
+   .. code-block:: fstar
+
+      p /\ q   //conjunction
+      p \/ q   //disjunction
+      ~p       //negation
+      p ==> q  //implication
+      p <==> q //bi-implication
+
+   For example, one can say (as shown below) that for all natural
+   numbers ``x`` and ``y``, if the modulus ``x % y`` is ``0``, then
+   there exists a natural number ``z`` such that ``x`` is ``z * y``.
+   
+   .. code-block:: fstar
+
+     forall (x:nat) (y:nat). x % y = 0 ==> (exists (z:nat). x = z * y)
+
+   F* also has a notion of propositional equality, written ``==``,
+   that can be used to state that two terms of any type are equal. In
+   contrast, the boolean equality ``=`` can only be used on types that
+   support decidable equality. For instance, for ``f1, f2 : int ->
+   int``, you can write ``f1 == f2`` but you cannot write ``f1 = f2``,
+   since two functions cannot be decidably compared for equality.
+                                 
+.. _Part1_prop:
+
+Propositions
+^^^^^^^^^^^^
+
+The type ``prop`` defined in ``Prims`` is F*'s type of
+proof-irrelevant propositions. More informally, ``prop`` is the type
+given to facts that are provable using the SMT solver's classical
+logic.
+
+Propositions defined in ``prop`` need not be decidable. For example,
+for a Turing machine ``tm``, the fact ``halts tm`` can be defined as a
+``prop``, although it is impossible to decide for an arbitrary ``tm``
+whether ``tm`` halts on all inputs. This is contrast with ``bool``,
+the type of booleans ``{true, false}``. Clearly, one could not define
+``halts tm`` as a ``bool``, since one would be claiming that for
+``halts`` is function that for any ``tm`` can decide (by returning
+true or false) whether or not ``tm`` halts on all inputs.
+
+F* will implicitly convert a ``bool`` to a ``prop`` when needed, since
+a decidable fact can be turned into a fact that may be
+undecidable. But, when using propositions, one can define things that
+cannot be defined in ``bool``, including quantified formulae, as we'll
+see next.
+
+.. _Part1_prop_connectives:
+
+Propositional connectives
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Consider stating that ``factorial n`` always returns a positive
+number, when ``n:nat``. In the :ref:`previous section <Part1_ch1>` we
+learned that one way to do this is to give ``factorial`` a type like so.
+
+.. code-block:: fstar
+
+  val factorial (n:nat) : x:nat{x > 0}
+
+Here's another way to state it:
+
+.. code-block:: fstar
+                
+  forall (n:nat). factorial n > 0
+
+What about stating that ``factorial n`` can sometimes return a value
+that's greater than ``n * n``?
+
+.. code-block:: fstar
+                
+  exists (n:nat). factorial n > n * n
+  
+We've just seen our first use of universal and existential
+quantifiers.
+
+Quantifiers
+...........
+
+A universal quantifier is constructed using the ``forall`` keyword. Its
+syntax has the following shape.
+
+.. code-block:: fstar
+                
+  forall (x1:t1) ... (xn:tn) . p
+
+The ``x1 ... xn`` are bound variables and signify the domain over
+which one the proposition ``p`` is quantified. That is, ``forall
+(x:t). p`` is valid when for all ``v : t`` the proposition ``p[v/x]``
+is valid.
+
+And existential quantifier has similar syntax, using the ``exists``
+keyword.
+
+.. code-block:: fstar
+                
+   exists (x1:t1) ... (xn:tn) . p
+
+In this case, ``exists (x:t). p`` is valid when for some ``v : t`` the
+proposition ``p[v/x]`` is valid.
+
+The scope of a quantifier extends as far to the right as possible.
+
+As usual in F*, the types on the bound variables can be omitted and F*
+will infer them. However, in the case of quantified formulas, it's a
+good idea to write down the types, since the meaning of the quantifier
+can change significantly depending on the type of the variable. Consider
+the two propositions below.
+
+.. code-block:: fstar
+
+   exists (x:int). x < 0
+   exists (x:nat). x < 0
+
+The first formula is valid by considering ``x = -1``, while the second
+one is not—there is not natural number less than zero.
+
+It is possible to quantify over any F* type. This makes the
+quantifiers higher order and dependent. For example, one can write
+
+.. code-block:: fstar
+
+   forall (n:nat) (p: (x:nat{x >= n} -> prop)). p n 
+
+.. note::
+
+   The SMT solver uses a number of heuristics to determine if a
+   quantified proposition is valid. As you start writing more
+   substantial F* programs and proofs, it will become important to
+   learn a bit about these heuristics. We'll cover this in a later
+   chapter. If you're impatient, you can also read about in on the `F*
+   wiki
+   <https://github.com/FStarLang/FStar/wiki/Quantifiers-and-patterns>`_.
+   
+
+Conjunction, Disjunction, Negation, Implication
+...............................................
+
+In addition to the quantifiers, you can build propositions by
+combining them with other propositions, using the operators below, in
+decreasing order of precedence.
+
+**Negation**
+
+The proposition ``~p`` is valid if the negation of ``p`` is
+valid. This is similar to the boolean operator ``not``, but applies to
+propositions rather than just booleans.
+
+**Conjunction**
+
+The proposition ``p /\ q`` is valid if both ``p`` and ``q`` are
+valid. This is similar to the boolean operator ``&&``, but applies to
+propositions rather than just booleans.
+
+**Disjunction**
+
+The proposition ``p \/ q`` is valid if at least one of ``p`` and ``q``
+are valid. This is similar to the boolean operator ``||``, but applies
+to propositions rather than just booleans.
+
+**Implication**
+
+The proposition ``p ==> q`` is valid if whenever ``p`` is valid, ``q``
+is also valid.
+
+**Double Implication**
+
+The proposition ``p <==> q`` is valid if ``p`` and ``q`` are
+equivalent.
+
+.. note::
+
+   This may come as a surprise, but these precedence rules mean that
+   ``p /\ q ==> r`` is parsed as ``(p /\ q) ==> r`` rather than
+   ``p /\ (q ==> r)``. When in doubt, use parentheses.
+
+
+Atomic propositions
+^^^^^^^^^^^^^^^^^^^
+
+We've shown you how to form new propositions by building them from
+existing propositions using the connectives. But, what about the basic
+propositions themselves?
+
+
+Falsehood
+.........
+
+The proposition ``False`` is always invalid.
+
+Truth
+.....
+
+The proposition ``True`` is always valid.
+
+.. _Part1_ch2_propositional_equality:
+
+Propositional equality
+......................
+
+We learned in the previous chapter about the :ref:`two different forms
+of equality <Part1_equality>`. The type of propositional equality is
+
+.. code-block:: fstar
+
+   val ( == ) (#a:Type) (x:a) (y:a) : prop
+
+Unlike decidable equality ``(=)``, propositional equality is defined
+for all types. The result type of ``(==)`` is ``prop``, the type of
+propositions, meaning that ``x == y`` is a proof-irrelevant
+proposition.
+
+   
+**Turning a Boolean into a proposition**
+
+Propositional equality provides a convenient way to turn a boolean
+into a proposition. For any boolean ``b``, then term ``b == true`` is
+a ``prop``. One seldom needs to do write this manually (although it
+does come up occasionally), since F* will automatically insert a
+``b==true`` if you're using a ``b:bool`` in a context where a ``prop``
+was expected.
+
+``Type`` vs. ``prop``
+.....................
+
+This next bit is quite technical. Don't worry if you didn't understand
+it at first. It's enough to know at this stage that, just like
+automatically converting a boolean to `prop`, F* automatically
+converts any type to ``prop``, when needed. So, you can form new
+atomic propositions out of types.
+
+Every well-typed term in F* has a type. Even types have types, e.g.,
+the type of ``int`` is ``Type``, i.e., ``int : Type``, ``bool :
+Type``, and even ``prop : Type``. We'll have to leave a full
+description of this to a later section, but, for now, we'll just
+remark that another way to form an atomic proposition is to convert a
+type to a proposition.
+
+For any type ``t : Type``, the type ``_:unit { t } : prop``. We call
+this "squashing" a type. This is so common, that F* provides two
+mechanisms to support this:
+
+1. All the propositional connectives, like ``p /\ q`` are designed so
+   that both ``p`` and ``q`` can be types (i.e., ``p,q : Type``),
+   rather than propositions, and they implicitly squash their types.
+
+2. The standard library, ``FStar.Squash``, provides several utilities
+   for manipulating squashed types.
+
+.. _Part1_ch2_assertions:
+
+Assertions
+^^^^^^^^^^
+
+Now that we have a way to write down propositions, how can we ask F*
+to check if those propositions are valid? There are several ways, the
+most common of which is an *assertion*. Here's an example:
+
+.. code-block:: fstar
+
+   let sqr_is_nat (x:int) : unit = assert (x * x >= 0)
+
+This defines a function ``sqr_is_nat : int -> unit``—meaning it takes
+a ``nat`` and always returns ``()``. So, it's not very interesting as
+a function.
+
+However, it's body contains an assertion that ``x * x >= 0``. Now,
+many programming languages support runtime assertions—code to check
+some property of program when it executes. But, assertions in F* are
+different—they are checked by the F* compiler *before* your program is
+executed.
+
+In this case, the ``assert`` instructs F* to encode the program to SMT
+and to ask Z3 if ``x * x >= 0`` is valid for an arbitrary integer
+``x:int``. If Z3 can confirm this fact (which it can), then F* accepts
+the program and no trace of the assertion is left in your program when
+it executes. Otherwise the program is rejected at compile time. For
+example, if we were to write
+
+.. code-block:: fstar
+
+   let sqr_is_pos (x:int) : unit = assert (x * x > 0)
+
+Then, F* complains with the following message::
+
+  Ch2.fst(5,39-5,50): (Error 19) assertion failed; The SMT solver could not prove the query, try to spell your proof in more detail or increase fuel/ifuel
+
+You can use an assertion with any proposition, as shown below.
+
+.. literalinclude:: ../code/Part1.Assertions.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: max
+   :end-before: //SNIPPET_END: max                              
+    
+Assumptions
+^^^^^^^^^^^
+
+The dual of an assertion is an assumption. Rather than asking F* and
+Z3 to prove a fact, an assumption allows one to tell F* and Z3 to
+accept that some proposition is valid. You should use assumptions with
+care—it's easy to make a mistake and assume a fact that isn't actually
+true.
+
+The syntax of an assumption is similar to an assertion. Here, below,
+we write ``assume (x <> 0)`` to tell F* to assume ``x`` is non-zero in
+the rest of the function. That allows F* to prove that the assertion
+that follows is valid. 
+
+.. code-block:: fstar
+
+   let sqr_is_pos (x:int) = assume (x <> 0); assert (x * x > 0)                 
+
+Of course, the assertion is not valid for all ``x``—it's only valid
+for those ``x`` that also validate the preceding assumption. 
+
+Just like an ``assert``, the type of ``assume p`` is ``unit``.
+
+There's a more powerful form of assumption, called an ``admit``. The
+term ``admit()`` can given any type you like. For example,
+
+.. code-block:: fstar
+
+   let sqr_is_pos (x:int) : y:nat{y > 0} = admit()
+
+Both ``assume`` and ``admit`` can be helpful when you're working
+through a proof, but a proof isn't done until it's free of them.
+
+.. _Part1_quicksort:
+
+Case Study: Quicksort
+=====================
+
+We'll now put together what we've learned about defining recursive
+functions and proving lemmas about them to prove the correctness of
+`Quicksort <https://en.wikipedia.org/wiki/Quicksort>`_, a classic
+sorting algorithm.
+
+We'll start with lists of integers and describe some properties that
+we'd like to hold true of a sorting algorithm, starting with a
+function ``sorted``, which decides when a list of integers is sorted
+in increasing order, and ``mem``, which decides if a given element is
+in a list. Notice that ``mem`` uses an ``eqtype``, :ref:`the type of
+types that support decidable equality <Part1_equality>`.
+
+.. literalinclude:: ../code/Part1.Quicksort.fst
+       :language: fstar
+       :start-after: SNIPPET_START: sorted mem
+       :end-before: SNIPPET_END: sorted mem
+
+Given a sorting algorithm ``sort``, we would like to prove the
+following property, meaning that for all input list ``l``, the
+resulting list ``sort l`` is sorted and has all the elements that
+``l`` does.
+
+.. code-block:: fstar
+
+    forall l. sorted (sort l) /\ (forall i. mem i l <==> mem i (sort l))
+
+This specification is intentionally a bit weak, e.g., in case there
+are multiple identical elements in ``l``, this specification does not
+prevent ``sort`` from retaining only one of them.
+
+We will see how to improve this specification below, as part of an
+exercise.
+
+If you're unfamiliar with the algorithm, you can `read more about it
+here <https://en.wikipedia.org/wiki/Quicksort>`_. We'll describe
+several slightly different implementations and proofs of Quicksort in
+detail—you may find it useful to follow along interactively with the
+`entire code development <../code/Part1.Quicksort.fst>`_ of this
+sequence.
+
+Implementing ``sort``
+^^^^^^^^^^^^^^^^^^^^^
+
+Our implementation of Quicksort is pretty simple-minded. It always
+picks the first element of the list as the pivot; partitions the rest
+of the list into those elements greater than or equal to the pivot,
+and the rest; recursively sorts the partitions; and slots the pivot in
+the middle before returning. Here it is:
+
+.. literalinclude:: ../code/Part1.Quicksort.fst
+       :language: fstar
+       :start-after: SNIPPET_START: sort-impl
+       :end-before: SNIPPET_END: sort-impl
+
+There are a few points worth discussing in detail:
+
+1. The notation ``((<=) pivot)`` may require some explanation: it is
+   the *partial application* of the ``<=`` operator to just one
+   argument, ``pivot``. It is equivalent to ``fun x -> pivot <= x``.
+
+2. We have to prove that ``sort`` terminates. The measure we've
+   provided is ``length l``, meaning that at each recursive call,
+   we're claiming that the length of input list is strictly
+   decreasing.
+
+3. Why is this true? Well, informally, the recursive calls ``sort lo``
+   and ``sort hi`` are partitions of the ``tl`` of the list, which is
+   strictly shorter than ``l``, since we've removed the ``pivot``
+   element. We'll have to convince F* of this fact by giving
+   ``partition`` an interesting type that we'll see below.
+
+Implementing ``partition``
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Here's an implementation of ``partition``. It's a :ref:`higher-order
+function <Part1_higher_order_functions>`, where ``partition f l``
+returns a pair of lists ``l₁`` and ``l₂``, a partitioning of the
+elements in ``l`` such that the every element in ``l₁`` satisfies
+``f`` and the elements in ``l₂`` do not.
+
+.. literalinclude:: ../code/Part1.Quicksort.fst
+       :language: fstar
+       :start-after: SNIPPET_START: partition
+       :end-before: SNIPPET_END: partition
+
+The specification we've given ``partition`` is only partial—we do not
+say, for instance, that all the elements in ``l₁`` satisfy ``f``. We
+only say that the sum of the lengths of the ``l₁`` and ``l₂`` are
+equal to the length of ``l``. That's because that's the only property
+we need (so far) about ``partition``—this property about the lengths
+is what we need to prove that on the recursive calls ``sort lo`` and
+``sort hi``, the arguments ``lo`` and ``hi`` are strictly shorter than
+the input list.
+
+This style of partial specification should give you a sense of the art
+of program proof and the design choices between :ref:`intrinsic and
+extrinsic proof <Part1_intrinsic_extrinsic>`. One tends to specify
+only what one needs, rather than specifying all properties one can
+imagine right up front.
+
+Proving ``sort`` correct
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+Now that we have our definition of ``sort``, we still have to prove it
+correct. Here's a proof—it requires three auxiliary lemmas and we'll
+discuss it in detail.
+
+Our first lemma relates ``partition`` to ``mem``: it proves what we
+left out in the intrinsic specification of ``partition``, i.e., that
+all the elements in ``l₁`` satisfy ``f``, the elements in ``l₂`` do
+not, and every element in ``l`` appears in either ``l₁`` or ``l₂``.
+
+.. literalinclude:: ../code/Part1.Quicksort.fst
+       :language: fstar
+       :start-after: SNIPPET_START: partition_mem
+       :end-before: SNIPPET_END: partition_mem
+
+Our next lemma is very specific to Quicksort. If ``l₁`` and ``l₂`` are
+already sorted, and partitioned by ``pivot``, then slotting ``pivot``
+in the middle of ``l₁`` and ``l₂`` produces a sorted list. The
+specification of ``sorted_concat`` uses a mixture of refinement types
+(e.g., ``l1:list int{sorted l1}``) and ``requires`` / ``ensures``
+specifications–this is just a matter of taste.
+
+.. literalinclude:: ../code/Part1.Quicksort.fst
+       :language: fstar
+       :start-after: SNIPPET_START: sorted_concat
+       :end-before: SNIPPET_END: sorted_concat
+
+Our third lemma is a simple property about ``append`` and ``mem``.
+
+.. literalinclude:: ../code/Part1.Quicksort.fst
+       :language: fstar
+       :start-after: SNIPPET_START: append_mem
+       :end-before: SNIPPET_END: append_mem
+
+Finally, we can put the pieces together for our top-level statement
+about the correctness of ``sort``.
+
+.. literalinclude:: ../code/Part1.Quicksort.fst
+       :language: fstar
+       :start-after: SNIPPET_START: sort_correct
+       :end-before: SNIPPET_END: sort_correct
+
+The structure of the lemma is mirrors the structure of ``sort``
+itself.
+
+* In the base case, the proof is automatic.
+
+* In the inductive case, we partition the tail of the list and
+  recursively call the lemma on the the ``hi`` and ``lo`` components,
+  just like ``sort`` itself. The intrinsic type of ``partition`` is
+  also helpful here, using the ``length`` measure on the list to prove
+  that the induction here is well-founded.
+
+  - To prove the ``ensures`` postcondition, we apply our three
+    auxiliary lemmas.
+
+    + ``partition_mem ((<=) pivot) tl`` gives us the precondition of
+      needed to satisfy the ``requires`` clause of
+      ``sorted_concat``.
+
+    + We also need to prove the ``sorted`` refinements on ``sort lo``
+      and ``sort hi`` in order to call ``sorted_concat``, but the
+      recursive calls of the lemma give us those properties.
+
+    + After calling ``sorted_concat``, we have proven that the
+      resulting list is sorted. What's left is to prove that all the
+      elements of the input list are in the result, and ``append_mem``
+      does that, using the postcondition of ``partition_mem`` and the
+      induction hypothesis to relate the elements of ``append (sort
+      lo) (pivot :: sort hi)`` to the input list ``l``.
+
+Here's another version of the ``sort_correct`` lemma, this time
+annotated with lots of intermediate assertions.
+
+.. literalinclude:: ../code/Part1.Quicksort.fst
+       :language: fstar
+       :start-after: SNIPPET_START: sort_correct_annotated
+       :end-before: SNIPPET_END: sort_correct_annotated
+
+This is an extreme example, annotating with assertions at almost every
+step of the proof. However, it is indicative of a style that one often
+uses to interact with F* when doing SMT-assisted proofs. At each point
+in your program or proof, you can use ``assert`` to check what the
+prover "knows" at that point. See what happens if you move the
+assertions around, e.g., if you move ``assert (sort_ok lo)`` before
+calling ``sort_correct_annotated lo``, F* will complain that it is not
+provable.
+
+Limitations of SMT-based proofs at higher order
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+You may be wondering why we used ``(<=) pivot`` instead of ``fun x ->
+pivot <= x`` in our code. Arguably, the latter is more readable,
+particularly to those not already familiar with functional programming
+languages. Well, the answer is quite technical.
+
+We could indeed have written ``sort`` like this,
+
+.. literalinclude:: ../code/Part1.Quicksort.fst
+       :language: fstar
+       :start-after: SNIPPET_START: sort_alt
+       :end-before: SNIPPET_END: sort_alt
+
+And we could have tried to write our main lemma this way:
+
+.. literalinclude:: ../code/Part1.Quicksort.fst
+       :language: fstar
+       :start-after: SNIPPET_START: sort_alt_correct
+       :end-before: SNIPPET_END: sort_alt_correct
+
+However, without further assistance, F*+SMT is unable to prove the
+line at which the ``assume`` appears. It turns out, this is due to a
+fundamental limitation in how F* encodes its higher-order logic into
+the SMT solver's first-order logic. This encoding comes with some loss
+in precision, particularly for lambda terms. In this case, the SMT
+solver is unable to prove that the occurrence of ``fun x -> pivot <=
+x`` that appears in the proof of ``sort_alt_correct_annotated`` is
+identical to the occurrence of the same lambda term in ``sort_alt``,
+and so it cannot conclude that ``sort_alt l`` is really equal to
+``append (sort_alt lo) (pivot :: sort_alt hi))``.
+
+This is unfortunate and can lead to some nasty surprises when trying
+to do proofs about higher order terms. Here are some ways to avoid
+such pitfalls:
+
+* Try to use named functions at higher order, rather than lambda
+  literals. Named functions do not suffer a loss in precision when
+  encoded to SMT. This is the reason why ``(<=) pivot`` worked out
+  better than the lambda term here—the ``(<=)`` is a name that
+  syntactically appears in both the definition of ``sort`` and the
+  proof of ``sort_alt_correct`` and the SMT solver can easily see that
+  the two occurrences are identical.
+
+* If you must use lambda terms, sometimes an intrinsic proof style can
+  help, as we'll see below.
+
+* If you must use lambda terms with extrinsic proofs, you can still
+  complete your proof, but you will have to help F* along with tactics
+  or proofs by normalization, more advanced topics that we'll cover in
+  later sections.
+
+* Even more forward looking, recent `higher-order variants of SMT
+  solvers <https://matryoshka-project.github.io/>`_ are promising and
+  may help address some of these limitations.
+
+An intrinsic proof of ``sort``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+As we observed earlier, our proof of ``sort_correct`` had essentially
+the same structure as the definition of ``sort`` itself—it's tempting
+to fuse the definition of ``sort`` with ``sort_correct``, so that we
+avoid the duplication and get a proof of correctness of ``sort``
+built-in to its definition.
+
+So, here it is, a more compact proof of ``sort``, this time done
+intrinsically, i.e., by enriching the type of ``sort`` to capture the
+properties we want.
+
+.. literalinclude:: ../code/Part1.Quicksort.fst
+       :language: fstar
+       :start-after: SNIPPET_START: sort_intrinsic
+       :end-before: SNIPPET_END: sort_intrinsic
+
+We still use the same three auxiliary lemmas to prove the properties
+we want, but this time the recursive calls to sort the partitioned
+sub-lists also serve as calls to the induction hypothesis for the
+correctness property we're after.
+
+Notice also that in this style, the use of a lambda literal isn't
+problematic—when operating within the same scope, F*'s encoding to SMT
+is sufficiently smart to treat the multiple occurrences of ``fun x ->
+pivot <= x`` as identical functions.
+
+Runtime cost?
+.............
+
+You may be concerned that we have just polluted the definition of
+``sort_intrinsic`` with calls to three additional recursive
+functions–will this introduce any runtime overhead when executing
+``sort_intrinsic``? Thankfully, the answer to that is "no".
+
+As we'll learn in the section on :ref:`effects <effects>`, F* supports
+of notion of *erasure*—terms that can be proven to not contribute to
+the observable behavior of a computation will be erased by the
+compiler before execution. In this case, the three lemma invocations
+are total functions returning unit, i.e., these are functions that
+always return in a finite amount of time with the constant value
+``()``, with no other observable side effect. So, there is no point in
+keeping those function calls around—we may as well just optimize them
+away to their result ``()``.
+
+Indeed, if you ask F* to extract the program to OCaml (using
+``fstar --codegen OCaml``), here's what you get:
+
+.. code-block:: fstar
+
+  let rec (sort_intrinsic : Prims.int Prims.list -> Prims.int Prims.list) =
+    fun l ->
+      match l with
+      | [] -> []
+      | pivot::tl ->
+         let uu___ = partition (fun x -> pivot <= x) tl in
+         (match uu___ with
+          | (hi, lo) ->
+            append (sort_intrinsic lo) (pivot :: (sort_intrinsic hi)))
+
+The calls to the lemmas have disappeared.
+
+Exercises
+^^^^^^^^^
+
+Generic sorting
+...............
+
+Here's `a file with the scaffolding for this exercise
+<../code/exercises/Part1.Quicksort.Generic.fst>`_.
+
+The point of this exercise is to define a generic version of ``sort``
+that is parameterized by any total order over the list elements,
+rather than specializing ``sort`` to work on integer lists only. Of
+course, we want to prove our implementations correct. So, let's do it
+in two ways, both intrinsically and extrinsically. Your goal is to
+remove the all the occurrences of ``admit`` in the development below.
+
+.. literalinclude:: ../code/exercises/Part1.Quicksort.Generic.fst
+       :language: fstar
+
+.. container:: toggle
+
+    .. container:: header
+
+       **Answer**
+
+    .. literalinclude:: ../code/Part1.Quicksort.Generic.fst
+       :language: fstar
+
+
+Proving that ``sort`` is a permutation
+......................................
+
+We promised at the beginning of this section that we'd eventually give
+a better specification for ``sort``, one that proves that it doesn't
+drop duplicate elements in the list. That's the goal of the exercise
+in this section—we'll prove that our generic Quicksort is returns a
+permutation of the input list.
+
+Let's start by defining what it means for lists to be permutations of
+each other—we'll do this using occurrence counts.
+
+.. literalinclude:: ../code/exercises/Part1.Quicksort.Permutation.fst
+       :language: fstar
+       :start-after: //SNIPPET_START: count permutation
+       :end-before: //SNIPPET_END: count permutation
+
+The definitions should be self-explanatory. We include one key lemma
+``append_count`` to relate occurrence to list concatenations.
+
+The next key lemma to prove is ``partition_mem_permutation``.
+
+.. code-block:: fstar
+
+  val partition_mem_permutation (#a:eqtype)
+                                (f:(a -> bool))
+                                (l:list a)
+    : Lemma (let l1, l2 = partition f l in
+             (forall x. mem x l1 ==> f x) /\
+             (forall x. mem x l2 ==> not (f x)) /\
+             (is_permutation l (append l1 l2)))
+
+You will also need a lemma similar to the following:
+
+.. code-block:: fstar
+
+  val permutation_app_lemma (#a:eqtype) (hd:a) (tl l1 l2:list a)
+    : Lemma (requires (is_permutation tl (append l1 l2)))
+            (ensures (is_permutation (hd::tl) (append l1 (hd::l2))))
+
+Using these, and adaptations of our previous lemmas, prove:
+
+.. code-block:: fstar
+
+   val sort_correct (#a:eqtype) (f:total_order_t a) (l:list a)
+     : Lemma (ensures
+               sorted f (sort f l) /\
+               is_permutation l (sort f l))
+
+Load the `exercise script
+<../code/exercises/Part1.Quicksort.Permutation.fst>`_ and give it a
+try.
+
+
+.. container:: toggle
+
+    .. container:: header
+
+       **Answer**
+
+    .. literalinclude:: ../code/Part1.Quicksort.Permutation.fst
+       :language: fstar
+
+
+.. _Part1_termination:
+
+Proofs of termination
+=====================
+
+It's absolutely crucial to the soundness of F*'s core logic that all
+functions terminate. Otherwise, one could write non-terminating 
+functions like this::
+
+  let rec loop (x:unit) : False = loop x
+
+and show that ``loop () : False``, i.e., we'd have a proof term for
+``False`` and the logic would collapse.
+
+In the previous chapter, we just saw how to define recursive functions
+to :ref:`compute the length of list <Part1_inductives_length>` and to
+:ref:`append two lists <Part1_inductives_append>`. We also said
+:ref:`earlier <Part1_ch1_arrows>` that all functions in F*'s core are
+*total*, i.e., they always return in a finite amount of time. So, you
+may be wondering, what is it that guarantees that recursive function
+like ``length`` and ``append`` actually terminate on all inputs?
+
+The full details of how F* ensures termination of all functions in its
+core involves several elements, including positivity restrictions on
+datatype definitions and universe constraints. However, the main thing
+that you'll need to understand at this stage is that F* includes a
+termination check that applies to the recursive definitions of total
+functions. The check is a semantic check, not a syntactic criterion,
+like in some other dependently typed languages.
+
+We quickly sketch the basic structure of the F\* termination check on
+recursive functions---you'll need to understand a bit of this in order
+to write more interesting programs.
+
+A well-founded partial order on terms
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+In order to prove a function terminating in F\* one provides a
+*measure*: a pure expression depending on the function's
+arguments. F\* checks that this measure strictly decreases on each
+recursive call.  The measure for the arguments of the call is compared
+to the measure for the previous call according to a well-founded
+partial order on F\* terms. We write `v1 << v2` when `v1` precedes
+`v2` in this order.
+
+.. note::
+
+   A relation `R` is a well-founded partial order on a set `S` if, and
+   only if, `R` is a partial order on `S` and there are no infinite
+   descending chains in `S` related by `R`. For example, taking `S` to
+   be `nat`, the set of natural numbers, the integer ordering `<` is a
+   well-founded partial order (in fact, it is a total order).
+
+Since the measure strictly decreases on each recursive call, and there
+are no infinite descending chains, this guarantees that the function
+eventually stops making recursive calls, i.e., it terminates.
+
+.. _Part1_precedes_relation:
+
+The precedes relation
+.....................
+
+Given two terms ``v1:t1`` and ``v2:t2``, we can prove ``v1 << v2``
+if any of the following are true:
+
+1. **The ordering on integers**:
+
+   ``t1 = nat`` and ``t2 = nat`` and ``v1 < v2``
+
+   Negative integers are not related by the `<<` relation, which is
+   only a _partial_ order.
+
+2. **The sub-term ordering on inductive types**
+
+    If ``v2 = D u1 ... un``, where ``D`` is a constructor of an
+    inductive type fully applied to arguments ``u1`` to ``un``, then
+    ``v1 << v2`` if either
+
+    * ``v1 = ui`` for some ``i``, i.e., ``v1`` is a sub-term of ``v2``
+
+    * ``v1 = ui x`` for some ``i`` and ``x``, i.e., ``v1`` is the
+      result of applying a sub-term of ``v2`` to some argument ``x``.
+
+
+.. _Part1_why_length_terminates:
+
+
+Why ``length`` terminates
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Let's look again at the definition of ``length`` and see how F* checks
+that it terminates, i.e.,
+
+.. literalinclude:: ../code/Part1.Inductives.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: length
+   :end-before: //SNIPPET_END: length
+
+First off, the definition of ``length`` above makes use of various
+syntactic shorthands to hide some details. If we were to write it out
+fully, it would be as shown below:
+
+.. code-block:: fstar
+
+   let rec length #a (l:list a)
+     : Tot nat (decreases l)
+     = match l with
+       | [] -> 0
+       | _ :: tl -> 1 + length tl
+
+The main difference is on the second line. As opposed to just writing
+the result type of ``length``, in full detail, we write
+``Tot nat (decreases l)``. This states two things
+
+* The ``Tot nat`` part states that ``length`` is a total function
+  returning a ``nat``, just as the ``nat`` did before.
+
+* The additional ``(decreases l)`` specifying a *measure*, i.e., the
+  quantity that decreases at each recursive call according the
+  well-founded relation ``<<``.
+
+To check the definition, F* gives the recursively bound name
+(``length`` in this case) a type that's guarded by the measure. I.e.,
+for the body of the function, ``length`` has the following type:
+
+.. code-block:: fstar
+
+   #a:Type -> m:list a{ m << l } -> nat
+
+This is to say that when using ``length`` to make a recursive call, we
+can only apply it to an argument ``m << l``, i.e., the recursive call
+can only be made on an argument ``m`` that precedes the current
+argument ``l``. This is enough to ensure that the recursive calls will
+eventually bottom out, since there are no infinite descending chains
+related by ``<<``.
+
+In the case of ``length``, we need to prove at the recursive call
+``length tl`` that ``tl : (m : list a { m << l })``, or, equivalently
+that ``tl << l`` is valid. But, from the sub-term ordering on
+inductive types, ``l = Cons _ tl``, so ``tl << l`` is indeed provable
+and everything checks out.
+
+.. _Part1_lexicographic_orderings:
+
+Lexicographic orderings
+^^^^^^^^^^^^^^^^^^^^^^^
+
+F* also provides a convenience to enhance the well-founded ordering
+``<<`` to lexicographic combinations of ``<<``. That is, given two
+lists of terms ``v1, ..., vn`` and ``u1, ..., un``, F* accepts that
+the following lexicographic ordering::
+
+   v1 << u1 ‌‌\/ (v1 == u1 /\ (v2 << u2 ‌‌\/ (v2 == u2 /\ ( ... vn << un))))
+
+is also well-founded. In fact, it is possible to prove in F* that this
+ordering is well-founded, provided ``<<`` is itself well-founded.
+
+Lexicographic ordering are common enough that F* provides special
+support to make it convenient to use them. In particular, the
+notation::
+
+   %[v1; v2; ...; vn] << %[u1; u2; ...; un]
+
+is shorthand for::
+
+   v1 << u1 ‌‌\/ (v1 == u1 /\ (v2 << u2 ‌‌\/ (v2 == u2 /\ ( ... vn << un))))
+
+Let's have a look at lexicographic orderings at work in proving that
+the classic ``ackermann`` function terminates on all inputs.
+
+.. literalinclude:: ../code/Part1.Termination.fst
+   :language: fstar
+   :start-after: SNIPPET_START: ackermann
+   :end-before: SNIPPET_END: ackermann
+
+The ``decreases %[m;n]`` syntax tells F* to use the lexicographic
+ordering on the pair of arguments ``m, n`` as the measure to prove
+this function terminating.
+
+When defining ``ackermann m n``, for each recursive call of the form
+``ackermann m' n'``, F* checks that ``%[m';n'] << %[m;n]``, i.e., F*
+checks that either
+
+* ``m' << m``, or
+* ``m' = m`` and ``n' << n``
+
+There are three recursive calls to consider:
+
+1. ``ackermann (m - 1) 1``: In this case, since we know that ``m >
+   0``, we have ``m - 1 << m``, due to the ordering on natural
+   numbers. Since the ordering is lexicographic, the second argument
+   is irrelevant for termination.
+
+2. ``ackermann m (n - 1)``: In this case, the first argument remained
+   the same (i.e., it's still ``m``), but we know that ``n > 0`` so
+   ``n - 1 << n`` by the natural number ordering.
+
+3. ``ackermann (m - 1) (ackermann m (n - 1))``: Again, like in the
+   first case, the first argument ``m - 1 << m``, and the second is
+   irrelevant for termination.
+
+.. _Part1_termination_default_measures:
+
+Default measures
+^^^^^^^^^^^^^^^^
+
+As we saw earlier, F* allows you to write the following code, with no
+``decreases`` clause, and it still accepts it.
+
+.. literalinclude:: ../code/Part1.Inductives.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: length
+   :end-before: //SNIPPET_END: length
+
+For that matter, you can leave out the ``decreases`` clause in
+``ackermann`` and F* is okay with it.
+
+.. code-block:: fstar
+
+   let rec ackermann (m n:nat)
+     : nat
+     = if m=0 then n + 1
+       else if n = 0 then ackermann (m - 1) 1
+       else ackermann (m - 1) (ackermann m (n - 1))
+
+This is because F* uses a simple heuristic to choose the decreases
+clause, if the user didn't provide one.
+
+The *default* decreases clause for a total, recursive function is the
+lexicographic ordering of all the non-function-typed arguments, taken
+in order from left to right.
+
+That is, the default decreases clause for ``ackermann`` is exactly
+``decreases %[m; n]``; and the default for ``length`` is just
+``decreases %[a; l]`` (which is equivalent to ``decreases l``). So, you
+needn't write it.
+
+On the other hand, it you were to flip the order of arguments to
+``ackermann``, then the default choice of the measure would not be
+correct—so, you'll have to write it explicitly, as shown below.
+
+.. literalinclude:: ../code/Part1.Termination.fst
+   :language: fstar
+   :start-after: SNIPPET_START: ackermann_flip
+   :end-before: SNIPPET_END: ackermann_flip
+
+.. _Part1_mutual_recursion:
+
+Mutual recursion
+^^^^^^^^^^^^^^^^
+
+F* also supports mutual recursion and the same check of proving that a
+measure of the arguments decreases on each (mutually) recursive call
+applies.
+
+For example, one can write the following code to define a binary
+``tree`` that stores an integer at each internal node—the keyword
+``and`` allows defining several types that depend mutually on each
+other.
+
+To increment all the integers in the tree, we can write the mutually
+recursive functions, again using ``and`` to define ``incr_tree`` and
+``incr_node`` to depend mutually on each other. F* is able to prove
+that these functions terminate, just by using the default measure as
+usual.
+
+.. literalinclude:: ../code/Part1.Termination.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: incr_tree
+   :end-before: //SNIPPET_END: incr_tree
+
+.. note::
+
+   Sometimes, a little trick with lexicographic orderings can help
+   prove mutually recursive functions correct. We include it here as a
+   tip, you can probably skip it on a first read.
+
+   .. literalinclude:: ../code/Part1.Termination.fst
+      :language: fstar
+      :start-after: SNIPPET_START: foo_bar
+      :end-before: SNIPPET_END: foo_bar
+
+   What's happening here is that when ``foo l`` calls ``bar``, the
+   argument ``xs`` is legitimately a sub-term of ``l``. However, ``bar
+   l`` simply calls back ``foo l``, without decreasing the
+   argument. The reason this terminates, however, is that ``bar`` can
+   freely call back ``foo``, since ``foo`` will only ever call ``bar``
+   again with a smaller argument. You can convince F* of this by
+   writing the decreases clauses shown, i.e., when ``bar`` calls
+   ``foo``, ``l`` doesn't change, but the second component of the
+   lexicographic ordering does decrease, i.e., ``0 << 1``.
+
+
+The termination check, precisely
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Having seen a few examples at work, we can now describe how the
+termination check works in general.
+
+
+.. note::
+
+   We use a slightly more mathematical notation here, so that we can
+   be precise. If it feels unfamiliar, you needn't understand this
+   completely at first. Continue with the examples and refer back to
+   this section, if and when you feel like a precise description would
+   be helpful.
+
+When defining a recursive function
+
+.. math::
+
+   \mathsf{f~(\overline{x:t})~:~Tot~r~(decreases~m)~=~e}
+
+i.e., :math:`\mathsf{f}` is a function with several arguments
+:math:`\mathsf{x1:t1}, ..., \mathsf{x_n:t_n}`, returning
+:math:`\mathsf{r}` with measure :math:`\mathsf{m}`, mutually
+recursively with other functions of several arguments at type:
+
+.. math::
+
+   \mathsf{f_1~(\overline{x_1:t_1})~:~Tot~r_1~(decreases~m_1)} \\
+   \ldots \\
+   \mathsf{f_n~(\overline{x_n:t_n})~:~Tot~r_n~(decreases~m_n)} \\
+
+we check the definition of the function body of :math:`\mathsf{f}`
+(i.e., :math:`\mathsf{e}`) with all the mutually recursive functions
+in scope, but at types that restrict their domain, in the following
+sense:
+
+.. math::
+
+   \mathsf{f~:~(\overline{y:t}\{~m[\overline{y}/\overline{x}]~<<~m~\}~\rightarrow~r[\overline{y}/\overline{x}])} \\
+   \mathsf{f_1~:~(\overline{x_1:t_1}\{~m_1~<<~m~\}~\rightarrow~r_1)} \\
+   \ldots \\
+   \mathsf{f_n~:~(\overline{x_n:t_n}\{~m_n~<<~m~\}~\rightarrow~r_n)} \\
+
+That is, each function in the mutually recursive group can only be
+applied to arguments that precede the current formal parameters of
+:math:`\mathsf{f}` according to the annotated measures of each
+function.
+
+.. _Part1_termination_fibonacci:
+
+Exercise: Fibonacci in linear time
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+`Click here <../code/exercises/Part1.Termination.fst>`_ for the exercise file.
+
+Here's a function to compute the :math:`n`-th Fibonacci number.
+
+.. code-block:: fstar
+
+   let rec fibonacci (n:nat)
+     : nat
+     = if n <= 1
+       then 1
+       else fibonacci (n - 1) + fibonacci (n - 2)
+
+Here's a more efficient, tail-recursive, linear-time variant.
+
+.. code-block:: fstar
+
+   let rec fib a b n =
+      match n with
+      | 0 -> a
+      | _ -> fib b (a+b) (n-1)
+
+   let fibonacci n = fib 1 1 n
+
+Add annotations to the functions to get F* to accept them, in
+particular, proving that ``fib`` terminates.
+
+.. container:: toggle
+
+    .. container:: header
+
+       **Answer**
+
+    .. literalinclude:: ../code/Part1.Termination.fst
+       :language: fstar
+       :start-after: SNIPPET_START: fib
+       :end-before: SNIPPET_END: fib
+
+
+.. _Part1_termination_reverse:
+
+Exercise: Tail-recursive reversal
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+`Click here <../code/exercises/Part1.Termination.fst>`_ for the exercise file.
+
+Here is a function to reverse a list:
+
+.. code-block:: fstar
+
+   let rec rev #a (l:list a)
+     : list a
+     = match l with
+       | [] -> []
+       | hd::tl -> append (rev tl) hd
+
+But, it is not very efficient, since it is not tail recursive and,
+worse, it is quadratic, it traverses the reversed tail of the list
+each time to add the first element to the end of it.
+
+This version is more efficient, because it is tail recursive and
+linear.
+
+.. code-block:: fstar
+
+   let rec rev_aux l1 l2 =
+     match l2 with
+     | []     -> l1
+     | hd :: tl -> rev_aux (hd :: l1) tl
+
+   let rev l = rev_aux [] l
+
+Add type annotations to ``rev_aux`` and ``rev``, proving, in
+particular, that ``rev_aux`` terminates.
+
+.. container:: toggle
+
+    .. container:: header
+
+       **Answer**
+
+    .. literalinclude:: ../code/Part1.Termination.fst
+       :language: fstar
+       :start-after: SNIPPET_START: rev
+       :end-before: SNIPPET_END: rev
+
+.. _Part2:
+
+################################################################
+Representing Data, Proofs, and Computations with Inductive Types
+################################################################
+
+
+..
+   In this second part of the book, we'll dive deeper into F*, focusing
+   on *inductive definitions*, the main mechanism in F* for the user to
+   define new types.
+
+Earlier, we learned about :ref:`defining new data types <Part1_ch3>`
+in F*. For example, here's the type of lists parameterized by a type
+``a`` of the list elements.
+
+.. code-block:: fstar
+
+   type list a =
+     | Nil  : list a
+     | Cons : hd:a -> tl:list a -> list a
+
+We also saw that it was easy to define basic functions over these
+types, using pattern matching and recursion. For example, here's
+a function to compute the length of a list.
+
+.. literalinclude:: ../code/Part1.Inductives.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: length
+   :end-before: //SNIPPET_END: length
+
+The function ``length`` defines some property of a ``list`` (its
+length) separately from the definition of the ``list`` type itself.
+Sometimes, however, it can be convenient to define a property of a
+type together with the type itself. For example, in some situations,
+it may be natural to define the length of the list together with the
+definition of the list type itself, so that every list is structurally
+equipped with a notion of its length. Here's how:
+
+.. literalinclude:: ../code/Vec.fst
+   :language: fstar
+   :start-after: SNIPPET_START: vec
+   :end-before: SNIPPET_END: vec
+
+What we have here is our first indexed type, ``vec a n``. One way to
+understand this definition is that ``vec a : nat -> Type`` describes a
+family of types, ``vec a 0``, ``vec a 1``, ... etc., all representing
+lists of ``a``-typed elements, but where the *index* ``n`` describes
+the length of the list. With this definition of ``vec``, the function
+``length`` is redundant: given a ``v : vec a n`` we know that its
+``length v`` is ``n``, without having to recompute it.
+
+This style of enriching a type definition with indexes to state
+properties of the type is reminiscent of what we learned earlier about
+:ref:`intrinsic versus extrinsic proofs
+<Part1_intrinsic_extrinsic>`. Rather than defining a single type
+``list a`` for all lists and then separatately (i.e., extrinsically)
+defining a function ``length`` to compute the length of a list, with
+``vec`` we've enriched the type of the list intrinsically, so that
+type of ``vec`` immediately tells you its length.
+
+Now, you may have seen examples like this length-indexed ``vec`` type
+before---it comes up often in tutorials about dependently typed
+programming. But, indexed types can do a lot more. In this section we
+learn about indexed inductive types from three related perspectives:
+
+  * Representing data: Inductive types allow us to build new data
+    types, includes lists, vectors, trees, etc. in several flavors.
+    We present two case studies: :ref:`vectors <Part2_vectors>` and
+    :ref:`Merkle trees <Part2_merkle>`, a binary tree data structure
+    equipped with cryptographic proofs.
+
+  * Representing proofs: The core logic of F* rests upon several
+    simple inductive type definitions. We revisit the logical
+    connectives we've seen before (including the :ref:`propositional
+    connectives <Part2_connectives>` and :ref:`equality
+    <Part2_equality>`) and show how rather than being primitive
+    notions in F*, their definitions arise from a few core
+    constructions involving inductive type. Other core notions in the
+    language, including the handling of :ref:`termination proofs
+    <Part1_termination>`, can also be understood in terms of inductive
+    types that :ref:`model well-founded recursion
+    <Part2_well_founded_recursion>`.
+
+  * Representing computations: Inductive type definitions allow
+    embedding other programming languages or computational models
+    within F*. We develop two case studies.
+
+    + We develop a :ref:`deep embedding of the simply-typed lambda
+      calculus <Part2_stlc>` with several reduction strategies, and a
+      proof of its syntactic type soundness. The example showcases the
+      use of several inductive types to represent the syntax of a
+      programming language, a relation describing its type system, and
+      another relation describing its operational semantics.
+
+    + We also show how to use :ref:`higher-order abstract syntax
+      <Part2_phoas>` to represent well-typed lambda terms, a concise
+      style that illustrates how to use inductive types that store
+      functions.
+
+    + Finally, we look at a :ref:`shallow embedding of an imperative
+      programming language with structured concurrency <Part2_par>`,
+      representing computations as infinitely branching inductively
+      defined trees. The example introduces modeling computational
+      effects as monads and showcases the use of inductive types
+      at higher order.
+
+This section is somewhat more advanced than the first. It also
+interleaves some technical material about F*'s core logic with case
+studies showing some of those core concepts at work. You can certainly
+work through the material sequentially, but depending on your
+interests, you may find the following paths through the material to be
+more accessible.
+
+If you're familiar with dependent types but are new to F* and want a
+quick tour, the following path might work for you:
+
+  * :ref:`Length-indexed lists <Part2_vectors>`, F*-specific notations
+
+  * :ref:`Equality <Part2_equality>`
+
+  * :ref:`Logical connectives <Part2_connectives>`
+
+  * Any of the case studies, depending on your interest.
+
+If you're unfamiliar with dependent types and are more curious to
+learn how to use F* by working through examples, following path might
+work for you:
+
+  * :ref:`Inductive type definitions <Part2_inductives>`, basic concepts
+
+  * :ref:`Length-indexed lists <Part2_vectors>`, F*-specific notations in the simplest setting
+
+  * :ref:`Merkle trees <Part2_merkle>`, a more interesting example, with applications to cryptographic security
+
+  * :ref:`Logical connectives <Part2_connectives>`, some utilities to manipulate F*'s logical connectives
+
+  * Any of the case studies, depending on your interest, with the :ref:`Simply Typed Lambda Calculus <Part2_stlc>` perhaps the easiest of them.
+
+But, by the end of this section, through several exercises, we expect
+the reader to be familiar enough with inductive types to define their
+own data structures and inductively defined relations, while also
+gaining a working knowledge of some core parts of F*'s type theory.
+
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Contents:
+
+   part2_inductive_type_families
+   part2_vectors
+   part2_merkle
+   part2_equality
+   part2_logical_connectives
+   part2_stlc
+   part2_phoas
+   part2_well_founded
+   part2_par
+   part2_universes
+
+..
+  Vectors for basics
+    - But vectors are too simple, we can do them with just refined lists
+
+  Merkle trees to capture more interesting invariants of a type
+
+  Higher-order inductive types: infinitely branching trees
+    - Free monads and computation trees
+
+  Representing proof terms: Simply-typed lambda calculus
+
+  Representing proof terms: Accessibility predicates and termination proofs
+
+.. _Part2:
+
+################################################################
+Representing Data, Proofs, and Computations with Inductive Types
+################################################################
+
+
+..
+   In this second part of the book, we'll dive deeper into F*, focusing
+   on *inductive definitions*, the main mechanism in F* for the user to
+   define new types.
+
+Earlier, we learned about :ref:`defining new data types <Part1_ch3>`
+in F*. For example, here's the type of lists parameterized by a type
+``a`` of the list elements.
+
+.. code-block:: fstar
+
+   type list a =
+     | Nil  : list a
+     | Cons : hd:a -> tl:list a -> list a
+
+We also saw that it was easy to define basic functions over these
+types, using pattern matching and recursion. For example, here's
+a function to compute the length of a list.
+
+.. literalinclude:: ../code/Part1.Inductives.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: length
+   :end-before: //SNIPPET_END: length
+
+The function ``length`` defines some property of a ``list`` (its
+length) separately from the definition of the ``list`` type itself.
+Sometimes, however, it can be convenient to define a property of a
+type together with the type itself. For example, in some situations,
+it may be natural to define the length of the list together with the
+definition of the list type itself, so that every list is structurally
+equipped with a notion of its length. Here's how:
+
+.. literalinclude:: ../code/Vec.fst
+   :language: fstar
+   :start-after: SNIPPET_START: vec
+   :end-before: SNIPPET_END: vec
+
+What we have here is our first indexed type, ``vec a n``. One way to
+understand this definition is that ``vec a : nat -> Type`` describes a
+family of types, ``vec a 0``, ``vec a 1``, ... etc., all representing
+lists of ``a``-typed elements, but where the *index* ``n`` describes
+the length of the list. With this definition of ``vec``, the function
+``length`` is redundant: given a ``v : vec a n`` we know that its
+``length v`` is ``n``, without having to recompute it.
+
+This style of enriching a type definition with indexes to state
+properties of the type is reminiscent of what we learned earlier about
+:ref:`intrinsic versus extrinsic proofs
+<Part1_intrinsic_extrinsic>`. Rather than defining a single type
+``list a`` for all lists and then separatately (i.e., extrinsically)
+defining a function ``length`` to compute the length of a list, with
+``vec`` we've enriched the type of the list intrinsically, so that
+type of ``vec`` immediately tells you its length.
+
+Now, you may have seen examples like this length-indexed ``vec`` type
+before---it comes up often in tutorials about dependently typed
+programming. But, indexed types can do a lot more. In this section we
+learn about indexed inductive types from three related perspectives:
+
+  * Representing data: Inductive types allow us to build new data
+    types, includes lists, vectors, trees, etc. in several flavors.
+    We present two case studies: :ref:`vectors <Part2_vectors>` and
+    :ref:`Merkle trees <Part2_merkle>`, a binary tree data structure
+    equipped with cryptographic proofs.
+
+  * Representing proofs: The core logic of F* rests upon several
+    simple inductive type definitions. We revisit the logical
+    connectives we've seen before (including the :ref:`propositional
+    connectives <Part2_connectives>` and :ref:`equality
+    <Part2_equality>`) and show how rather than being primitive
+    notions in F*, their definitions arise from a few core
+    constructions involving inductive type. Other core notions in the
+    language, including the handling of :ref:`termination proofs
+    <Part1_termination>`, can also be understood in terms of inductive
+    types that :ref:`model well-founded recursion
+    <Part2_well_founded_recursion>`.
+
+  * Representing computations: Inductive type definitions allow
+    embedding other programming languages or computational models
+    within F*. We develop two case studies.
+
+    + We develop a :ref:`deep embedding of the simply-typed lambda
+      calculus <Part2_stlc>` with several reduction strategies, and a
+      proof of its syntactic type soundness. The example showcases the
+      use of several inductive types to represent the syntax of a
+      programming language, a relation describing its type system, and
+      another relation describing its operational semantics.
+
+    + We also show how to use :ref:`higher-order abstract syntax
+      <Part2_phoas>` to represent well-typed lambda terms, a concise
+      style that illustrates how to use inductive types that store
+      functions.
+
+    + Finally, we look at a :ref:`shallow embedding of an imperative
+      programming language with structured concurrency <Part2_par>`,
+      representing computations as infinitely branching inductively
+      defined trees. The example introduces modeling computational
+      effects as monads and showcases the use of inductive types
+      at higher order.
+
+This section is somewhat more advanced than the first. It also
+interleaves some technical material about F*'s core logic with case
+studies showing some of those core concepts at work. You can certainly
+work through the material sequentially, but depending on your
+interests, you may find the following paths through the material to be
+more accessible.
+
+If you're familiar with dependent types but are new to F* and want a
+quick tour, the following path might work for you:
+
+  * :ref:`Length-indexed lists <Part2_vectors>`, F*-specific notations
+
+  * :ref:`Equality <Part2_equality>`
+
+  * :ref:`Logical connectives <Part2_connectives>`
+
+  * Any of the case studies, depending on your interest.
+
+If you're unfamiliar with dependent types and are more curious to
+learn how to use F* by working through examples, following path might
+work for you:
+
+  * :ref:`Inductive type definitions <Part2_inductives>`, basic concepts
+
+  * :ref:`Length-indexed lists <Part2_vectors>`, F*-specific notations in the simplest setting
+
+  * :ref:`Merkle trees <Part2_merkle>`, a more interesting example, with applications to cryptographic security
+
+  * :ref:`Logical connectives <Part2_connectives>`, some utilities to manipulate F*'s logical connectives
+
+  * Any of the case studies, depending on your interest, with the :ref:`Simply Typed Lambda Calculus <Part2_stlc>` perhaps the easiest of them.
+
+But, by the end of this section, through several exercises, we expect
+the reader to be familiar enough with inductive types to define their
+own data structures and inductively defined relations, while also
+gaining a working knowledge of some core parts of F*'s type theory.
+
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Contents:
+
+   part2_inductive_type_families
+   part2_vectors
+   part2_merkle
+   part2_equality
+   part2_logical_connectives
+   part2_stlc
+   part2_phoas
+   part2_well_founded
+   part2_par
+   part2_universes
+
+..
+  Vectors for basics
+    - But vectors are too simple, we can do them with just refined lists
+
+  Merkle trees to capture more interesting invariants of a type
+
+  Higher-order inductive types: infinitely branching trees
+    - Free monads and computation trees
+
+  Representing proof terms: Simply-typed lambda calculus
+
+  Representing proof terms: Accessibility predicates and termination proofs
+
+.. _Part2_equality:
+
+Equality Types
+==============
+
+In an :ref:`early section <Part1_equality>` we learned that F*
+supports at least two kinds of equality. In this section, we look in
+detail at definitional equality, propositional equality, extensional
+equality of functions, and decidable equality. These topics are fairly
+technical, but are core features of the language and their treatment
+in F* makes essential use of an indexed inductive type, ``equals #t x
+y``, a proposition asserting the equality of ``x:t`` and ``y:t``.
+
+Depending on your level of comfort with functional programming and
+dependent types, you may want to skip or just skim this chapter on a
+first reading, returning to it for reference if something is unclear.
+
+Definitional Equality
+.....................
+
+One of the main distinctive feature of a type theory like F* (or Coq,
+Lean, Agda etc., and in contrast with foundations like set theory) is
+that *computation* is a primitive notion within the theory, such that
+lambda terms that are related by reduction are considered
+identical. For example, there is no way to distinguish within the
+theory between :math:`(\lambda x.x) 0` and :math:`0`, since the former
+reduces in a single step of computation to the latter. Terms that are
+related by reduction are called *definitionally equal*, and this is
+the most primitive notion of equality in the language. Definitional
+equality is a congruence, in the sense that within any context
+:math:`T[]`, :math:`T[n]` is definitionally equal to :math:`T[m]`,
+when :math:`n` and :math:`m` are definitionally equal.
+
+Since definitionally equal terms are identical, all type theories,
+including F*, will implicit allow treating a term ``v:t`` as if it had
+type ``t'``, provided ``t`` and ``t'`` are definitionally equal.
+
+Let's look at a few examples, starting again with our type of
+length-indexed vectors.
+
+.. literalinclude:: ../code/ProvableEquality.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: vec$
+   :end-before: //SNIPPET_END: vec$
+
+As the two examples below show a ``v:vec a n`` is also has type ``vec
+a m`` when ``n`` and ``m`` are definitionally equal.
+
+.. literalinclude:: ../code/ProvableEquality.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: vec_conversions$
+   :end-before: //SNIPPET_END: vec_conversions$
+
+In the first case, a single step of computation (a function
+application, or :math:`\beta`-reduction) suffices; while the second
+case requires a :math:`\beta`-reduction followed by a step of integer
+arithmetic. In fact, any computational step, including unfolding
+defintions, conditionals, fixpoint reduction etc. are all allowed when
+deciding if terms are definitionally equivalent---the code below
+illustrates how F* implicitly reduces the ``factorial`` function when
+deciding if two terms are definitionally equal.
+
+.. literalinclude:: ../code/ProvableEquality.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: vec_conversions_fact$
+   :end-before: //SNIPPET_END: vec_conversions_fact$
+
+Of course, there is nothing particularly special about the ``vec``
+type or its indices. Definitional equality applies everywhere, as
+illustrated below.
+
+.. literalinclude:: ../code/ProvableEquality.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: conv_int$
+   :end-before: //SNIPPET_END: conv_int$
+
+Here, when adding ``1`` to ``x``, F* implicitly converts the type of
+``x`` to ``int`` by performing a :math:`\beta`-reduction followed by a
+case analysis.
+
+Propositional Equality
+......................
+
+Definitional equality is so primitive in the language that there is no
+way to even state within the terms that two terms are definitional
+equal, i.e., there is no way to state within the logic that two terms
+are related to each other by reduction. The closest one can get
+stating that two terms are equal is through a notion called a
+*provable equality* or propositional equality.
+
+In thinking of propositions as types, we mentioned at the :ref:`very
+start of the book <Part1>`, that one can think of a type ``t`` as a
+proposition, or a statement of a theorem, and ``e : t`` as a proof of
+the theorem ``t``. So, one might ask, what type corresponds to the
+equality proposition and how are proofs of equality represented?
+
+The listing below shows the definition of an inductive type ``equals
+#a x y`` representing the equality proposotion between ``x:a`` and
+``y:a`` . Its single constructor ``Reflexivity`` is an equality proof.
+
+.. literalinclude:: ../code/ProvableEquality.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: equals$
+   :end-before: //SNIPPET_END: equals$
+
+Its easy to construct some simple equality proofs. In the second case,
+just as with our vector examples, F* accepts ``Reflexivity #_ #6`` as
+having type ``equals (factorial 3) 6``, since ``equals 6 6`` is
+definitionally equal to ``equals (factorial 3) 6``.
+
+.. literalinclude:: ../code/ProvableEquality.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: sample_equals_proofs$
+   :end-before: //SNIPPET_END: sample_equals_proofs$
+
+Although the only constructor of ``equals`` is ``Reflexivity``, as the
+the following code shows, ``equals`` is actually an equivalence
+relation, satisfying (in addition to reflexivity) the laws of symmetry
+and transitivity.
+
+.. literalinclude:: ../code/ProvableEquality.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: equivalence_relation$
+   :end-before: //SNIPPET_END: equivalence_relation$
+
+This might seem like magic: how is it is that we can derive symmetry
+and transitivity from reflexivity alone? The answer lies in how F*
+interprets inductive type definitions.
+
+In particular, given an inductive type definition of type
+:math:`T~\overline{p}`, where :math:`\overline{p}` is a list of
+parameters and, F* includes an axiom stating that any value :math:`v:
+T~\overline{p}` must be an application of one of the constructors of
+:math:`T`, :math:`D~\overline{v} : T~\overline{p'}`, such that
+:math:`\overline{p} = \overline{p'}`.
+
+In the case of equality proofs, this allows F* to conclude that every
+equality proof is actually an instance of ``Reflexivity``, as shown
+below.
+
+.. literalinclude:: ../code/ProvableEquality.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: uip_refl$
+   :end-before: //SNIPPET_END: uip_refl$
+
+Spend a minute looking at the statement above: the return type is a
+statement of equality about equality proofs. Write down a version of
+``uip_refl`` making all implicit arguments explicit.
+
+.. container:: toggle
+
+    .. container:: header
+
+       **Answer**
+
+    .. literalinclude:: ../code/ProvableEquality.fst
+       :language: fstar
+       :start-after: //SNIPPET_START: uip_refl_explicit$
+       :end-before: //SNIPPET_END: uip_refl_explicit$
+
+--------------------------------------------------------------------------------
+
+In fact, from ``uip_refl``, a stronger statement showing that all
+equality proofs are equal is also provable. The property below is
+known as the *uniqueness of identity proofs* (UIP) and is at the core
+of what makes F* an extensional type theory.
+
+.. literalinclude:: ../code/ProvableEquality.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: uip$
+   :end-before: //SNIPPET_END: uip$
+
+The F* module ``Prims``, the very first module in every program's
+dependence graph, defines the ``equals`` type as shown here. The
+provable equality predicate ``(==)`` that we've used in several
+examples already is just a squashed equality proof, as shown below.
+
+.. code-block:: fstar
+
+   let ( == ) #a (x y : a) = squash (equals x y)
+
+In what follows, we'll mostly use squashed equalities, except where we
+wish to emphasize the reflexivity proofs.
+
+Equality Reflection
+...................
+
+What makes F* an *extensional* type theory (and unlike the
+*intensional* type theories implemented by Coq, Lean, Agda, etc.) is a
+feature known as equality reflection. Whereas intensional type
+theories treat definitional and provable equalities separate, in F*
+terms that are provably equal are also considered definitionally
+equal. That is, if in a given context ``x == y`` is derivable, the
+``x`` is also definitionally equal to ``y``. This has some
+wide-reaching consequences.
+
+Implicit conversions using provable equalities
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Recall from the start of the chapter that ``v:vec a ((fun x -> x) 0)``
+is implicitly convertible to the type ``vec a 0``, since the two types
+are related by congruence and reduction. However, as the examples
+below show, if ``a == b`` is derivable in the context, then
+``v:a`` can be implicity converted to the type ``b``.
+
+.. literalinclude:: ../code/ProvableEquality.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: conversion_with_equality_proofs$
+   :end-before: //SNIPPET_END: conversion_with_equality_proofs$
+
+We do not require a proof of ``a == b`` to be literally bound in the
+context. As the example below shows, the hypothesis ``h`` is used in
+conjunction with the control flow of the program to prove that in the
+``then`` branch ``aa : int`` and in the ``else`` branch ``bb : int``.
+
+.. literalinclude:: ../code/ProvableEquality.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: conversion_complex$
+   :end-before: //SNIPPET_END: conversion_complex$
+
+In fact, with our understanding of equality proofs, we can better
+explain how case analysis works in F*. In the code above, the
+``then``-branch is typechecked in a context including a hypothesis
+``h_then: squash (equals (x > 0) true)``, while the ``else`` branch
+includes the hypothesis ``h_else: squash (equals (x > 0) false)``. The
+presence of these additional control-flow hypotheses, in conjunction
+with whatever else is in the context (in particular hypothesis ``h``)
+allows us to derive ``(a == int)`` and ``(b == int)`` in the
+respective branches and convert the types of ``aa`` and ``bb``
+accordingly.
+
+Undecidability and Weak Normalization
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Implicit conversions with provable equalities are very convenient---we
+have relied on it without noticing in nearly all our examples so far,
+starting from the simplest examples about lists to vectors and Merkle
+trees, and some might say this is the one key feature which gives F*
+its programming-oriented flavor.
+
+However, as the previous example hinted, it is, in general,
+undecidable to determine if ``a == b`` is derivable in a given
+context. In practice, however, through the use of an SMT solver, F*
+can often figure out when terms are provably equal and convert using
+it. But, it cannot always do this. In such cases, the F* standard
+library offers the following primitive (in FStar.Pervasives), which
+allows the user to write ``coerce_eq pf x``, to explicitly coerce the
+type of ``x`` using the equality proof ``pf``.
+
+.. code-block:: fstar
+
+   let coerce_eq (#a #b:Type) (_:squash (a == b)) (x:a) : b = x
+
+Another consequence of equality reflection is the loss of strong
+normalization. Intensional type theories enjoy a nice property
+ensuring that every term will reduce to a canonical normal form, no
+matter the order of evaluation. F* does not have this property, since
+some terms, under certain evaluation orders, can reduce
+infinitely. However, metatheory developed for F* proves that closed
+terms (terms without free variables) in the ``Tot`` effect do not
+reduce infinitely, and as a corollary, there are no closed proofs of
+``False``.
+
+F* includes various heuristics to avoid getting stuck in an infinite
+loop when reducing open terms, but one can craft examples to make F*'s
+reduction macinery loop forever. As such, deciding if possibly open
+terms have the same normal form is also undecidable in F*.
+
+.. _Part2_funext:
+
+Functional Extensionality
+.........................
+
+Functional extensionality is a principle that asserts the provable
+equality of functions that are pointwise equal. That is, for functions
+:math:`f` and :math:`g`, :math:`\forall x. f x == g x` implies
+:math:`f == g`.
+
+This principle is provable as a theorem in F*, but only for function
+literals, or, equivalently, :math:`\eta`-expanded functions. That is,
+the following is a theorem in F*.
+
+.. literalinclude:: ../code/ProvableEquality.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: funext_eta$
+   :end-before: //SNIPPET_END: funext_eta$
+
+.. note::
+
+   Note, the proof of the theorem makes use of tactics, a topic we'll
+   cover in a later chapter. You do not need to understand it in
+   detail, yet. The proof roughly says to descend into every sub-term
+   of the goal and try to rewrite it using the pointwise equality
+   hypothesis ``hyp``, and if it fails to just rewrite the sub-term to
+   itself.
+
+Unfortunately, functional extensionality does not apply to all
+functions. That is, the following is not provable in F* nor is it
+sound to assume it as an axiom.
+
+.. literalinclude:: ../code/ProvableEquality.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: funext$
+   :end-before: //SNIPPET_END: funext$
+
+The problem is illustrated by the following counterexample, which
+allows deriving ``False`` in a context where ``funext`` is valid.
+
+.. literalinclude:: ../code/ProvableEquality.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: funext_false$
+   :end-before: //SNIPPET_END: funext_false$
+
+The proof works by exploiting the interaction with refinement
+subtyping. ``f`` and ``g`` are clearly not pointwise equal on the
+entire domain of natural numbers, yet they are pointwise equal on the
+positive natural numbers. However, from ``ax #pos f g`` we gain that
+``f == g``, and in particular that ``f 0 == g 0``, which is false.
+
+.. note::
+
+   The trouble arises in part because although ``ax:funext`` proves
+   ``squash (equals #(pos -> int) f g)``, F*'s encoding of the
+   equality to the SMT solver (whose equality is untyped) treats the
+   equality as ``squash (equals #(nat -> int) f g)``, which leads to
+   the contradiction.
+
+Further, :math:`\eta`-equivalent functions in F* are not considered
+provably equal. Otherwise, in combination with ``funext_on_eta``, an
+:math:`\eta`-equivalence principle leads to the same contradiction as
+``funext_false``, as shown below.
+
+.. literalinclude:: ../code/ProvableEquality.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: eta_equiv_false$
+   :end-before: //SNIPPET_END: eta_equiv_false$
+
+The F* standard library module ``FStar.FunctionalExtensionality``
+provides more information and several utilities to work with
+functional extensionality on :math:`\eta`-expanded functions.
+
+Thanks in particular to Aseem Rastogi and Dominique Unruh for many
+insights and discussions related to functional extensionality.
+
+Exercise
+........
+
+Leibniz equality ``leq x y``, relates two terms ``x:a`` and ``y:a`` if
+for all predicates ``p:a -> Type``, ``p a`` implies ``p b``. That is,
+if no predicate can distinguish ``x`` and ``y``, the they must be
+equal.
+
+Define Leibniz equality and prove that it is an equivalence relation.
+
+Then prove that Leibniz equality and the equality predicate ``equals x
+y`` defined above are isomorphic, in the sense that ``leq x y ->
+equals x y`` and ``equals x y -> leq x y``.
+
+`Exercise file <../code/exercises/Part2.Leibniz.fst>`_
+
+.. container:: toggle
+
+    .. container:: header
+
+       **Hint**
+
+       The section on Leibniz equality `here
+       <https://plfa.github.io/Equality/>`_ tells you how to do it in
+       Agda.
+
+    .. literalinclude:: ../code/ProvableEquality.fst
+       :language: fstar
+       :start-after: //SNIPPET_START: leibniz$
+       :end-before: //SNIPPET_END: leibniz$
+
+--------------------------------------------------------------------------------
+
+.. _Part2_equality_qualifiers:
+
+Decidable equality and equality qualifiers
+..........................................
+
+To end this chapter, we discuss a third kind of equality in F*, the
+polymorphic *decidable equality* with the signature shown below taken
+from the the F* module ``Prims``.
+
+.. code-block:: fstar
+
+   val ( = ) (#a:eqtype) (x y:a) : bool
+
+On ``eqtype``, i.e., ``a:Type{hasEq a}``, decidable quality ``(=)``
+and provable equality coincide, as shown below.
+
+.. literalinclude:: ../code/ProvableEquality.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: dec_equals_dec$
+   :end-before: //SNIPPET_END: dec_equals_dec$
+
+That is, for the class of ``eqtype``, ``x = y`` returns a boolean
+value that decides equality. Decidable equality and ``eqtype`` were
+first covered in :ref:`an earlier chapter <Part1_equality>`, where we
+mentioned that several primitive types, like ``int`` and ``bool`` all
+validate the ``hasEq`` predicate and are, hence, instances of ``eqtype``.
+
+When introducing a new inductive type definition, F* tries to
+determine whether or not the type supports decidable equality based on
+a structural equality of the representation of the values of that
+type. If so, the type is considered an ``eqtype`` and uses of the ``(
+= )`` operator are compiled at runtime to structural comparison of
+values provided by the target language chosen, e.g., OCaml, F\#, or C.
+
+The criterion used to determine whether or not the type supports
+equality decidable is the following.
+
+Given an inductive type definition of :math:`T` with parameters
+:math:`\overline{p}` and indexes :math:`~\overline{q}`, for each
+constructor of :math:`D` with arguments :math:`\overline{v:t_v}`,
+
+1. Assume, or every type parameter :math:`t \in \overline{p}`, :math:`\mathsf{hasEq}~t`.
+
+2. Assume, for recursive types, for all :math:`\overline{q}`, :math:`\mathsf{hasEq}~(T~\overline{p}~\overline{q})`.
+
+3. For all arguments :math:`\overline{v:t_v}`, prove :math:`\mathsf{hasEq}~t_v`.
+
+If the proof in step 3 suceeds for all constructors, then F*
+introduces an axiom
+:math:`\forall~\overline{p}~\overline{q}. (\forall t \in \overline{p}. \mathsf{hasEq}~t) \Rightarrow \mathsf{hasEq}~(T~\overline{p}~\overline{q})`.
+
+If the check in step 3 fails for any constructor, F* reports an error
+which the user can address by adding one of two qualifiers to the type.
+
+1. ``noeq``: This qualifier instructs F* to consider that the type
+   does not support decidable equality, e.g., if one of the
+   constructors contains a function, as show below.
+
+   .. literalinclude:: ../code/ProvableEquality.fst
+      :language: fstar
+      :start-after: //SNIPPET_START: noeq$
+      :end-before: //SNIPPET_END: noeq$
+
+2. ``unopteq``: This qualifier instructs F* to determine whether a
+   given instance of the type supports equality, even when some of its
+   parameters are not themselves instances of ``eqtype``. This can be
+   useful in situations such as the following:
+
+   .. literalinclude:: ../code/ProvableEquality.fst
+      :language: fstar
+      :start-after: //SNIPPET_START: unopteq$
+      :end-before: //SNIPPET_END: unopteq$
+
+This `wiki page
+<https://github.com/FStarLang/FStar/wiki/Deriving-hasEq-predicate-for-inductive-types,-and-types-of-equalities-in-F*>`_
+provides more information about equality qualifiers on inductive types.
+
+.. _Part2_inductives:
+
+Inductive type definitions
+==========================
+
+An inductive type definition, sometimes called a *datatype*, has the
+following general structure.
+
+.. math::
+
+   \mathsf{type}~T_1~\overline{(x_1:p_1)} : \overline{y_1:q_1} \rightarrow \mathsf{Type} = \overline{| D_1 : t_1} \\
+   \ldots\qquad\qquad\qquad\qquad\\   
+   \mathsf{and}~T_n~\overline{(x_n:p_n)} : \overline{y_n:q_n} \rightarrow \mathsf{Type} =  \overline{| D_n : t_n} \\
+
+This defines :math:`n` mutually inductive types, named :math:`T_1 \ldots
+T_n`, called the *type constructors*. Each type constructor :math:`T_i`
+has a number of *parameters*, the :math:`\overline{x_i : p_i}`, and a
+number of *indexes*, the :math:`\overline{y_i:q_i}`.
+
+Each type constructor :math:`T_i` has zero or more *data constructors*
+:math:`\overline{D_i:t_i}`. For each data constructor :math:`D_{ij}`, its
+type :math:`t_{ij}` must be of the form :math:`\overline{z:s} \rightarrow
+T_i~\bar{x_i}~\bar{e}`, i.e., it must be a function type returning an
+instance of :math:`T_i` with *the same parameters*
+:math:`\overline{x_i}` as in the type constructor's signature, but with
+any other well-typed terms :math:`\overline{e}` for the index
+arguments. This is the main difference between a parameter and an
+index—a parameter of a type constructor *cannot* vary in the result
+type of the data constructors, while the indexes can.
+
+Further, in each of the arguments :math:`\overline{z:s}` of the data
+constructor, none of the mutually defined type constructors
+:math:`\overline{T}` may appear to the left of an arrow. That is, all
+occurrences of the type constructors must be *strictly positive*. This
+is to ensure that the inductive definitions are well-founded, as
+explained below. Without this restriction, it is easy to break
+soundness by writing non-terminating functions with ``Tot`` types.
+
+Also related to ensuring logical consistency is the *universe* level
+of an inductive type definition. We'll return to that later, once
+we've done a few examples.
+
+.. _Part2_strict_positivity:
+
+Strictly positive definitions
++++++++++++++++++++++++++++++
+
+As a strawman, consider embedding a small dynamically typed
+programming language within F*. All terms in our language have the
+same static type ``dyn``, although at runtime values could have
+type ``Bool``, or ``Int``, or ``Function``.
+
+One attempt at representing a language like this using a data type in
+F* is as follows:
+
+.. literalinclude:: ../code/Part2.Positivity.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: dyn$
+   :end-before: //SNIPPET_END: dyn$
+
+The three cases of the data type represent our three kinds of runtime
+values: ``Bool b``, ``Int b``, and ``Function f``. The ``Function``
+case, however, is problematic: The argument ``f`` is itself a function
+from ``dyn -> dyn``, and the constructor ``Function`` allows promoting
+a ``dyn -> dyn`` function into the type ``dyn`` itself, e.g., one can
+represent the identity function in ``dyn`` as ``Function (fun (x:dyn)
+-> x)``. However, the ``Function`` case is problematic: as we will see
+below, it allows circular definitions that enable constructing
+instances of ``dyn`` without actually providing any base case. F*
+rejects the definition of ``dyn``, saying "Inductive type dyn does not
+satisfy the strict positivity condition".
+
+Consider again the general shape of an inductive type definition:
+
+.. math::
+
+   \mathsf{type}~T_1~\overline{(x_1:p_1)} : \overline{y_1:q_1} \rightarrow \mathsf{Type} = \overline{| D_1 : t_1} \\
+   \ldots\qquad\qquad\qquad\qquad\\   
+   \mathsf{and}~T_n~\overline{(x_n:p_n)} : \overline{y_n:q_n} \rightarrow \mathsf{Type} =  \overline{| D_n : t_n} \\
+
+This definition is strictly positive when
+
+ * for every type constructor :math:`T \in T_1, ..., T_n`,
+
+ * and every data constructor :math:`D : t \in \overline{D_1},
+   ... \overline{D_n}`, where `t` is of the form
+   :math:`x0:s_0 \rightarrow ...  \rightarrow xn:s_n  \rightarrow T_i ...`,
+   and :math:`s_0, ..., s_n` are the types of the fields of :math:`D`
+
+ * and for all instantiations :math:`\overline{v}` of the type parameters
+   :math:`\overline{p}` of the type :math:`T`,
+
+ * :math:`T` does not appear to the left of any arrow in any
+   :math:`s \in (s_0, ..., s_k)[\overline{v}/\overline{p}]`.
+
+Our type ``dyn`` violates this condition, since the defined typed
+``dyn`` appears to the left of an arrow type in the ``dyn ->
+dyn``-typed field of the ``Function`` constructor.
+
+To see what goes wrong if F* were to accept this definition, we can
+suppress the error reported by using the option ``__no_positivity``
+and see what happens.
+
+.. literalinclude:: ../code/Part2.Positivity.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: nopos_dyn$
+   :end-before: //SNIPPET_END: nopos_dyn$
+
+.. note::
+
+   F* maintains an internal stack of command line options. The
+   ``#push-options`` pragma pushes additional options at the top of
+   the stack, while ``#pop-options`` pops the stack. The pattern used
+   here instructs F* to typecheck ``dyn`` only with the
+   ``__no_positivity`` option enabled. As we will see, the
+   ``__no_positivity`` option can be used to break soundness, so use
+   it only if you really know what you're doing.
+
+Now, having declared that ``dyn`` is a well-formed inductive type,
+despite not being strictly positive, we can break the soundness of
+F*. In particular, we can write terms and claim they are total, when
+in fact their execution will loop forever.
+
+.. literalinclude:: ../code/Part2.Positivity.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: nopos_dyn_loop$
+   :end-before: //SNIPPET_END: nopos_dyn_loop$
+
+Here, the type of ``loop`` claims that it is a term that always
+evaluates in a finite number of steps to a value of type ``dyn``. Yet,
+reducing it produces an infinite chain of calls to ``loop'
+(Function loop')``. Admitting a non-positive definition like ``dyn``
+has allowed us to build a non-terminating loop.
+
+Such loops can also allow one to prove ``False`` (breaking soundness),
+as the next example shows.
+
+.. literalinclude:: ../code/Part2.Positivity.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: non_positive$
+   :end-before: //SNIPPET_END: non_positive$
+
+This example is very similar to ``dyn``, except ``NP`` stores a
+non-positive function that returns ``False``, which allows use to
+prove ``ff : False``, i.e., in this example, not only does the
+violation of strict positivity lead to an infinite loop at runtime, it
+also renders the entire proof system of F* useless, since one can
+prove ``False``.
+
+Finally, in the example below, although the type ``also_non_pos`` does
+not syntactically appear to the left of an arrow in a field of the
+``ANP`` constructor, an instantiation of the type parameter ``f``
+(e.g., with the type ``f_false``) does make it appear to the left of
+an arrow---so this type too is deemed not strictly positive, and can be used
+to prove ``False``.
+
+.. literalinclude:: ../code/Part2.Positivity.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: also_non_positive$
+   :end-before: //SNIPPET_END: also_non_positive$
+
+We hope you are convinced that non-strictly positive types should not
+be admissible in inductive type definitions. In what follows, we will
+no longer use the ``__no_positivity`` option. In a later section, once
+we've introduced the *effect of divergence*, we will see that
+non-positive definitions can safely be used in a context where
+programs are not expected to terminate, allowing one to safely model
+things like the ``dyn`` type, without compromising the soundness of
+F*.
+
+.. _Part2_strictly_positive_annotations:
+
+Strictly Positive Annotations
+-----------------------------
+
+Sometimes it is useful to parameterize an inductive definition with a
+type function, without introducing a non-positive definition as we did
+in ``also_non_pos`` above.
+
+For example, the definition below introduces a type ``free f a``, a 
+form of a tree whose leaf nodes contain ``a`` values, and whose
+internal nodes branch according the type function ``f``. 
+
+.. literalinclude:: ../code/Part2.Positivity.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: free$
+   :end-before: //SNIPPET_END: free$
+
+We can instantiate this generic ``free`` to produce various kinds of
+trees. Note: when instantiating ``free list a`` in
+``variable_branching_list`` below, we need to explicitly re-define the
+``list`` type with a strict-positivity annotation: F* does not
+correctly support rechecking type constructors to prove that they are
+strictly positive when they are used at higher order.
+
+.. literalinclude:: ../code/Part2.Positivity.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: free_instances$
+   :end-before: //SNIPPET_END: free_instances$
+
+However, we should only be allowed to instantate ``f`` with type
+functions that are strictly positive in their argument, since otherwise
+we can build a proof of ``False``, as we did with
+``also_non_pos``. The ``@@@strictly_positive`` attribute on the
+formal parameter of ``f`` enforces this.
+
+If we were to try to instantiate ``free`` with a non-strictly positive
+type function, 
+
+.. literalinclude:: ../code/Part2.Positivity.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: free_bad$
+   :end-before: //SNIPPET_END: free_bad$
+
+then F* raises an error:
+
+.. code-block::
+
+    Binder (t: Type) is marked strictly positive, but its use in the definition is not
+   
+Unused Annotations
+------------------
+
+Sometimes one indexes a type by another type, though the index has no
+semantic meaning. For example, in several F* developments that model
+mutable state, the a heap reference is just a natural number modeling
+its address in the heap. However, one might use the type ``let ref
+(a:Type) = nat`` to represent the type of a reference, even though the
+type ``a`` is not used in the definition. In such cases, it can be
+useful to mark the parameter as unused, to inform F*'s positivity
+checker that the type index is actually irrelevant. The snippet below
+shows an example:
+
+.. literalinclude:: ../code/Part2.Positivity.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: unused$
+   :end-before: //SNIPPET_END: unused$
+
+Here, we've marked the parameter of ``ref`` with the ``unused``
+attribute. We've also marked ``ref`` as ``irreducible`` just to
+ensure for this example that F* does not silently unfold the
+definition of ``ref``.
+
+Now, knowing that the parameter of ``ref`` is unused, one can define
+types like ``linked_list a``, where although ``linked_list a`` appears
+as an argument to the ``ref`` type, the positivity checker accepts it,
+since the parameter is unused. This is similar to the use of a
+``strictly_positive`` annotation on a parameter.
+
+However, with the ``unused`` attribute, one can go further: e.g., the
+type ``neg_unused`` shows that even a negative occurrence of the
+defined type is accepted, so long as it appears only as an
+instantiation of an unused parameter.
+
+.. _Part2_connectives:
+
+Constructive & Classical Connectives
+====================================
+
+In :ref:`an earlier chapter <Part1_prop_connectives>`, we learned
+about the propositional connectives :math:`\forall, \exists,
+\Rightarrow, \iff, \wedge, \vee, \neg`, etc. Whereas in other logical
+frameworks these connectives are primitive, in a type theory like F*
+these connectives are defined notions, built from inductive type
+definitions and function types. In this section, we take a closer look
+at these logical connectives, show their definitions, and present some
+utilities to manipulate them in proofs.
+
+Every logical connective comes in two flavors. First, in its most
+primitive form, it is defined as an inductive or arrow type, giving a
+constructive interpretation to the connective. Second, and more
+commonly used in F*, is a *squashed*, or proof-irrelevant, variant of
+the same connective---the squashed variant is classical rather than
+constructive and its proofs are typically derived by writing partial
+proof terms with the SMT filling in the missing parts.
+
+Each connective has an *introduction* principle (which describes how
+to build proofs of that connective) and an *elimination* principle
+(which describes how to use a proof of that connective to build other
+proofs). Example uses of introduction and elimination principles for
+all the connectives can be found in `ClassicalSugar.fst
+<https://github.com/FStarLang/FStar/blob/master/tests/micro-benchmarks/ClassicalSugar.fst>`_
+
+All these types are defined in ``Prims``, the very first module in all
+F* programs.
+
+Falsehood
+.........
+
+The ``empty`` inductive type is the proposition that has no
+proofs. The logical consistency of F* depends on there being no closed
+terms whose type is ``empty``.
+
+.. code-block:: fstar
+
+   type empty =
+
+This definition might look odd at first: it defines an inductive type
+with *zero* constructors. This is perfectly legal in F*, unlike in
+languages like OCaml or F#.
+
+The squashed variant of ``empty`` is called ``False`` and is defined
+as shown below:
+
+.. code-block:: fstar
+
+   let False = squash empty
+
+Introduction
+++++++++++++
+
+The ``False`` proposition has no introduction form, since it has no proofs.
+
+Elimination
++++++++++++
+
+From a (hypothetical) proof of ``False``, one can build a proof of any
+other type.
+
+.. literalinclude:: ../code/Connectives.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: empty_elim$
+   :end-before: //SNIPPET_END: empty_elim$
+
+This body of ``elim_false`` is a ``match`` expression with no branches,
+which suffices to match all the zero cases of the ``empty`` type.
+
+``FStar.Pervasives.false_elim`` provides an analogous elimination rule
+for ``False``, as shown below, where the termination check for the
+recursive call succeeds trivially in a context with ``x:False``.
+
+.. literalinclude:: ../code/Connectives.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: false_elim$
+   :end-before: //SNIPPET_END: false_elim$
+
+Truth
+.....
+
+The ``trivial`` inductive type has just a single proof, ``T``.
+
+.. code-block::
+
+   type trivial = T
+
+.. note::
+
+   Although isomorphic to the ``unit`` type with its single element
+   ``()``, for historic reasons, F* uses the ``trivial`` type to
+   represent trivial proofs. In the future, it is likely that
+   ``trivial`` will just be replaced by ``unit``.
+
+The squashed form of ``trivial`` is written ``True`` and is defined as:
+
+.. code-block::
+
+   let True = squash trivial
+
+Introduction
+++++++++++++
+
+The introduction forms for both the constructive and squashed variants
+are trivial.
+
+.. code-block::
+
+   let _ : trivial = T
+   let _ : True = ()
+
+Elimination
++++++++++++
+
+There is no elimination form, since proofs of ``trivial`` are vacuous
+and cannot be used to derive any other proofs.
+
+
+Conjunction
+...........
+
+A constructive proof of ``p`` and ``q`` is just a pair containing
+proofs of ``p`` and ``q``, respectively.
+
+.. code-block::
+
+   type pair (p q:Type) = | Pair : _1:p -> _2:q -> pair p q
+
+.. note::
+
+   This type is isomorphic to the tuple type ``p & q`` that we
+   encountered previously :ref:`here <Part1_tuples>`. F* currently
+   uses a separate type for pairs used in proofs and those used to
+   pair data, though there is no fundamental reason for this. In the
+   future, it is likely that ``pair`` will just be replaced by the
+   regular tuple type.
+
+The squashed form of conjunction is written ``/\`` and is defined as
+follows:
+
+.. code-block::
+
+   let ( /\ ) (p q:Type) = squash (pair p q)
+
+Introduction
+++++++++++++
+
+Introducing a conjunction simply involves constructing a pair.
+
+.. literalinclude:: ../code/Connectives.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: and_intro$
+   :end-before: //SNIPPET_END: and_intro$
+
+To introduce the squashed version, there are two options. One can
+either rely entirely on the SMT solver to discover a proof of ``p /\
+q`` from proofs of ``p`` and ``q``, which it is usually very capable
+of doing.
+
+.. literalinclude:: ../code/Connectives.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: conj_intro$
+   :end-before: //SNIPPET_END: conj_intro$
+
+Or, if one needs finer control, F* offers specialized syntax
+(defined in ``FStar.Classical.Sugar``) to manipulate each of the
+non-trivial logical connectives, as shown below.
+
+.. literalinclude:: ../code/Connectives.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: conj_intro_sugar$
+   :end-before: //SNIPPET_END: conj_intro_sugar$
+
+The sugared introduction form for conjunction is, in general, as
+follows:
+
+.. code-block:: fstar
+
+   introduce p /\ q //Term whose top-level connective is /\
+   with proof_of_p  //proof_of_p : squash p
+   and  proof_of_q  //proof_of_q : squash q
+
+Elimination
++++++++++++
+
+Eliminating a conjunction comes in two forms, corresponding to
+projecting each component of the pair.
+
+.. literalinclude:: ../code/Connectives.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: and_elim$
+   :end-before: //SNIPPET_END: and_elim$
+
+For the squashed version, we again have two styles, the first relying
+on the SMT solver.
+
+.. literalinclude:: ../code/Connectives.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: conj_elim$
+   :end-before: //SNIPPET_END: conj_elim$
+
+And a style using syntactic sugar:
+
+.. literalinclude:: ../code/Connectives.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: conj_elim_sugar$
+   :end-before: //SNIPPET_END: conj_elim_sugar$
+
+Disjunction
+...........
+
+A constructive proof of ``p`` or ``q`` is represented by the following
+inductive type:
+
+.. code-block:: fstar
+
+   type sum (p q:Type) =
+     | Left : p -> sum p q
+     | Right : q -> sum p q
+
+The constructors ``Left`` and ``Right`` inject proofs of ``p`` or
+``q`` into a proof of ``sum p q``.
+
+.. note::
+
+   Just like before, this type is isomorphic to the type ``either p q``
+   from ``FStar.Pervasives``.
+
+The classical connective ``\/`` described previously is just a
+squashed version of ``sum``.
+
+.. code-block:: fstar
+
+   let ( \/ ) (p q: Type) = squash (sum p q)
+
+Introduction
+++++++++++++
+
+As with the other connectives, introducing a constructive disjunction
+is just a matter of using the ``Left`` or ``Right`` constructor.
+
+To introduce the squashed version ``\/``, one can either rely on the
+SMT solver, as shown below.
+
+.. literalinclude:: ../code/Connectives.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: or_intro$
+   :end-before: //SNIPPET_END: or_intro$
+
+Or, using the following syntactic sugar, one can specifically provide
+a proof for either the ``Left`` or ``Right`` disjunct.
+
+.. literalinclude:: ../code/Connectives.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: or_intro_sugar$
+   :end-before: //SNIPPET_END: or_intro_sugar$
+
+Elimination
++++++++++++
+
+Eliminating a disjunction requires a *motive*, a goal proposition to
+be derived from a proof of ``sum p q`` or ``p \/ q``.
+
+In constructive style, eliminating ``sum p q`` amounts to just
+pattern matching on the cases and constructing a proof of the goal
+by applying a suitable goal-producing hypothesis.
+
+.. literalinclude:: ../code/Connectives.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: sum_elim$
+   :end-before: //SNIPPET_END: sum_elim$
+
+The squashed version is similar, except the case analysis can either
+be automated by SMT or explicitly handled using the syntactic
+sugar.
+
+.. literalinclude:: ../code/Connectives.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: or_elim$
+   :end-before: //SNIPPET_END: or_elim$
+
+.. literalinclude:: ../code/Connectives.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: or_elim_sugar$
+   :end-before: //SNIPPET_END: or_elim_sugar$
+
+Implication
+...........
+
+One of the elimination principles for disjunction used the implication
+connective ``==>``. Its definition is shown below:
+
+.. code-block:: fstar
+
+   let ( ==> ) (p q : Type) = squash (p -> q)
+
+That is, ``==>`` is just the squashed version of the non-dependent
+arrow type ``->``.
+
+.. note::
+
+   In ``Prims``, the definition of ``p ==> q`` is actually ``squash (p
+   -> GTot q)``, a **ghost** function from ``p`` to ``q``. We'll learn
+   about this more when we encounter effects.
+
+Introduction
+++++++++++++
+
+Introducing a constructive arrow ``p -> q`` just involves constructing
+a :math:`\lambda`-literal of the appropriate type.
+
+One can turn several kinds of arrows into implications, as shown below.
+
+One option is to directly use a function from the ``FStar.Classical``
+library, as shown below:
+
+.. code-block:: fstar
+
+   val impl_intro_tot (#p #q: Type) (f: (p -> q)) : (p ==> q)
+
+However, this form is seldom used in F*. Instead, one often works with
+functions between squashed propositions, or Lemmas, turning them into
+implications when needed. We show a few styles below.
+
+.. literalinclude:: ../code/Connectives.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: implies_intro$
+   :end-before: //SNIPPET_END: implies_intro$
+
+Unlike the other connectives, there is no fully automated SMT-enabled
+way to turn an arrow type into an implication. Of course, the form
+shown above remains just sugar: it may be instructive to look at its
+desugaring, shown below.
+
+.. code-block:: fstar
+
+   let implies_intro_1 (#p #q:Type) (pq: (squash p -> squash q))
+     : squash (p ==> q)
+     = FStar.Classical.Sugar.implies_intro
+              p
+              (fun (_: squash p) -> q)
+              (fun (pf_p: squash p) -> pq pf_p)
+
+``FStar.Squash`` and ``FStar.Classical`` provide the basic building
+blocks and the sugar packages it into a more convenient form for use.
+
+Elimination
++++++++++++
+
+Of course, the elimination form for a constructive implication, i.e.,
+``p -> q`` is just function application.
+
+.. code-block:: fstar
+
+   let arrow_elim #p #q (f:p -> q) (x:p) : q = f x
+
+The elimination rule for the squashed form is the classical logical
+rule *modus ponens*, which is usually very well automated by SMT, as
+shown in ``implies_elim`` below. We also provide syntactic sugar for
+it, for completeness, though it is seldom used in practice.
+
+.. literalinclude:: ../code/Connectives.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: implies_elim$
+   :end-before: //SNIPPET_END: implies_elim$
+
+Negation
+........
+
+Negation is just a special case of implication.
+
+In its constructive form, it corresponds to ``p -> empty``.
+
+In ``Prims``, we define ``~p`` as ``p ==> False``.
+
+Being just an abbreviation for an implication to ``False``, negation
+has no particular introduction or elimination forms of its
+own. However, the following forms are easily derivable.
+
+Introduction (Exercise)
++++++++++++++++++++++++
+
+Prove the following introduction rule for negation:
+
+`Exercise file <../code/exercises/Part2.Connectives.Negation.fst>`__
+
+.. code-block:: fstar
+
+   val neg_intro #p (f:squash p -> squash False)
+     : squash (~p)
+
+.. container:: toggle
+
+    .. container:: header
+
+       **Answer**
+
+    .. literalinclude:: ../code/Connectives.fst
+       :language: fstar
+       :start-after: //SNIPPET_START: neg_intro$
+       :end-before: //SNIPPET_END: neg_intro$
+
+--------------------------------------------------------------------------------
+
+
+Elimination (Exercise)
++++++++++++++++++++++++
+
+Prove the following elimination rule for negation using the sugar
+rather than just SMT only.
+
+.. code-block:: fstar
+
+   val neg_elim #p #q (f:squash (~p)) (x:unit -> Lemma p)
+     : squash (~q)
+
+`Exercise file <../code/exercises/Part2.Connectives.Negation.fst>`__
+
+.. container:: toggle
+
+    .. container:: header
+
+       **Answer**
+
+    .. literalinclude:: ../code/Connectives.fst
+       :language: fstar
+       :start-after: //SNIPPET_START: neg_elim$
+       :end-before: //SNIPPET_END: neg_elim$
+
+--------------------------------------------------------------------------------
+
+Universal Quantification
+........................
+
+Whereas implication is represented by the non-dependent arrow ``p ->
+q``, universal quantification corresponds to the dependent arrow ``x:t
+-> q x``. Its classical form in ``forall (x:t). q x``, and is defined
+in as shown below:
+
+.. code-block:: fstar
+
+   let ( forall ) #t (q:t -> Type) = squash (x:t -> q x)
+
+.. note::
+
+   As with ``==>``, in ``Prims`` uses ``x:t -> GTot (q x)``, a ghost
+   arrow, though the difference is not yet significant.
+
+Introduction
+++++++++++++
+
+Introducing a dependent function type ``x:t -> p x`` is just like
+introducing a non-dependent one: use a lambda literal.
+
+For the squashed form, F* provides sugar for use with several styles,
+where names corresponding to each of the ``forall``-bound variables on
+the ``introduce`` line are in scope for the proof term on the ``with``
+line.
+
+.. literalinclude:: ../code/Connectives.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: forall_intro$
+   :end-before: //SNIPPET_END: forall_intro$
+
+Note, as ``forall_intro_3`` shows, the sugar also works for ``forall``
+quantifiers of arities greater than 1.
+
+Elimination
++++++++++++
+
+Eliminating a dependent function corresponds to dependent function
+application.
+
+.. code-block:: fstar
+
+   let dep_arrow_elim #t #q (f:(x:t -> q x)) (x:t) : q x = f x
+
+For the squashed version, eliminating a ``forall`` quantifier amounts
+to instantiating the quantifier for a given term. Automating proofs
+that require quantifier instantiation is a large topic in its own
+right, as we'll cover in a later section---this `wiki page
+<https://github.com/FStarLang/FStar/wiki/Quantifiers-and-patterns>`_
+provides some hints.
+
+Often, eliminating a universal quantifier is automated by the SMT
+solver, as shown below, where the SMT solver easily instantiates the
+quantified hypothesis ``f`` with ``a``.
+
+.. literalinclude:: ../code/Connectives.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: forall_elim_1$
+   :end-before: //SNIPPET_END: forall_elim_1$
+
+But, F* also provides syntactic sugar to explicitly trigger quantifier
+insantiation (as shown below), where the terms provided on the
+``with`` line are instantiations for each of the binders on the
+``eliminate`` line.
+
+.. literalinclude:: ../code/Connectives.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: forall_elim_sugar$
+   :end-before: //SNIPPET_END: forall_elim_sugar$
+
+Its desugaring may be illuminating:
+
+.. literalinclude:: ../code/Connectives.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: forall_elim_2_desugar$
+   :end-before: //SNIPPET_END: forall_elim_2_desugar$
+
+.. _Part2_connectives_exists:
+
+Existential Quantification
+..........................
+
+Finally, we come to existential quantification. Its constructive form
+is a dependent pair, a dependent version of the pair used to represent
+conjunctions. The following inductive type is defined in ``Prims``.
+
+.. code-block:: fstar
+
+   type dtuple2 (a:Type) (b: a -> Type) =
+      | Mkdtuple2 : x:a -> y:b x -> dtuple2 a b
+
+As with ``tuple2``, F* offers specialized syntax for ``dtuple2``:
+
+   * Instead of ``dtuple2 a (fun (x:a) -> b x)``, one writes ``x:a & b x``.
+
+   * Instead of writing ``Mkdtuple2 x y``, one writes ``(| x, y |)``.
+
+The existential quantifier ``exists (x:t). p x`` is a squashed version
+of the dependent pair:
+
+.. code-block:: fstar
+
+   let ( exists ) (#a:Type) (#b:a -> Type) = squash (x:a & b x)
+
+Introduction
+++++++++++++
+
+Introducing a constructive proof of ``x:a & b x`` is just a question
+of using the constructor---we show a concrete instance below.
+
+.. literalinclude:: ../code/Connectives.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: dtuple2_intro$
+   :end-before: //SNIPPET_END: dtuple2_intro$
+
+For the squashed version, introducing an ``exists (x:t). p x``
+automatically using the SMT solver requires finding an instance ``a``
+for the quantifier such that ``p a`` is derivable---this is the dual
+problem of quantifier instantiation mentioned with universal
+
+In the first example below, the SMT solver finds the instantiation and
+proof automatically, while in the latter two, the user picks which
+instantiation and proof to provide.
+
+.. literalinclude:: ../code/Connectives.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: exists_intro$
+   :end-before: //SNIPPET_END: exists_intro$
+
+Elimination
++++++++++++
+
+Just as with disjunction and conjunction, eliminating ``dtuple2`` or
+``exists`` requires a motive, a goal proposition that *does not
+mention* the bound variable of the quantifier.
+
+For constructive proofs, this is just a pattern match:
+
+.. literalinclude:: ../code/Connectives.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: dtuple2_elim$
+   :end-before: //SNIPPET_END: dtuple2_elim$
+
+For the ``exists``, the following sugar provides an elimination
+principle:
+
+.. literalinclude:: ../code/Connectives.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: exists_elim$
+   :end-before: //SNIPPET_END: exists_elim$
+
+Names corresponding to the binders on the ``eliminate`` line are in
+scope in the ``with`` line, which additionally binds a name for a
+proof term corresponding to the body of the existential formula. That
+is, in the examples above, ``x:t`` is implicitly in scope for the proof
+term, while ``pf_p: squash p``.
+
+Exercise
+++++++++
+
+In a :ref:`previous exercise <Part2_merkle_insert>`, we defined a
+function to insert an element in a Merkle tree and had it return a new
+root hash and an updated Merkle tree. Our solution had the following
+signature:
+
+.. literalinclude:: ../code/MerkleTree.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: update_hint
+   :end-before: //SNIPPET_END: update_hint
+
+Revise the solution so that it instead returns a dependent
+pair. ``dtuple2`` is already defined in ``Prims``, so you don't have
+to define it again.
+
+`Exercise file <../code/exercises/Part2.MerkleTreeUpdate.fst>`__
+
+.. container:: toggle
+
+    .. container:: header
+
+       **Answer**
+
+    .. literalinclude:: ../code/MerkleTree.fst
+       :language: fstar
+       :start-after: //SNIPPET_START: update
+       :end-before: //SNIPPET_END: update
+
+.. _Part2_merkle:
+
+Merkle Trees
+============
+
+A `Merkle tree <https://en.wikipedia.org/wiki/Merkle_tree>`_ is a
+cryptographic data structure designed by `Ralph Merkle
+<https://en.wikipedia.org/wiki/Ralph_Merkle>`_ in the late 1970s and
+has grown dramatically in prominence in the last few years, inasmuch
+as variants of Merkle trees are at the core of most `blockchain
+systems <https://en.wikipedia.org/wiki/Blockchain>`_.
+
+A Merkle tree makes use of cryptographic hashes to enable efficient
+cryptographic proofs of the authenticity of data stored in the
+tree. In particular, for a Merkle tree containing :math:`2^n` data
+items, it only takes :math:`n` hash computations to prove that a
+particular item is in the tree.
+
+In this section, we build a very simple, but canonical, Merkle tree
+and prove it correct and cryptographically secure. And we'll use
+several indexed inductive types to do it. Thanks to Aseem Rastogi for
+this example!
+
+Setting
+.......
+
+Merkle trees have many applications. To motivate our presentation
+here, consider the following simple scenario.
+
+A content provider (someone like, say, the New York Times) has a large
+archive of digital artifacts---documents, multimedia files, etc. These
+artifacts are circulated among users, but when receiving an artifact
+one may question its authenticity. One way to ensure the authenticity
+of received artifacts is for the content provider to use a digital
+signature based on a public-key cryptosystem and for users to verify
+these signatures upon receiving an artifact. However, signatures can
+be quite heavyweight for certain applications.
+
+Instead, the content provider can organize their archive into a Merkle
+tree, a tree of hashes with the artifacts themselves stored at the
+leaves, such that a single hash associated with the root node of the
+tree authenticates *all* the artifacts in the tree. By publishing just
+this root hash, and associating with each artifact a path in the tree
+from the root to it, a skeptical client can quickly check using a
+small number of hash computations (logarithmic in the size of the
+entire archive) whether or not a given artifact is authentic (by
+recomputing the root hash and checking if it matches the known
+published root hash).
+
+
+Intuitions
+..........
+
+Our Merkle tree will be a full binary tree of height :math:`n` storing
+:math:`2^n` data items and their corresponding hashes at the
+nodes. The main idea of a Merkle tree is for each internal node to
+also maintain a *hash of the hashes* stored at each of its
+children. If the hash algorithm being used is cryptographically
+secure, in the sense that it is collision resistant (i.e., it is
+computationally hard to find two strings that hash to the same value),
+then the hash associated with the root node authenticates the content
+of the entire tree.
+
+Informally, a Merkle tree is an authenticated data structure in that
+it is computationally hard to tamper with any of the data items in the
+tree while still producing the same root hash. Further, to prove that
+a particular data item ``d`` is in the tree, it suffices to provide
+the hashes associated with the nodes in the path from the root to that
+the leaf containing that item ``d``, and one can easily check by
+comparing hashes that the claimed path is accurate. In fact, we can
+prove that if a claimed path through the tree attests to the presence
+of some other item ``d' <> d``, then we can construct a collision on
+the underlying hash algorithm---this property will be our main proof of
+security.
+
+
+Preliminaries
+.............
+
+We'll model the resources and the hashes we store in our tree as
+strings of characters. F* standard library ``FStar.String`` provides
+some utilities to work with strings.
+
+In the code listing below, we define the following
+
+  * ``lstring n``, the type of strings of length ``n``. Like the
+    ``vec`` type, ``lstring`` is a length-indexed type; unlike
+    ``vector`` it is defined using a refinement type rather than an
+    indexed inductive type. Defining indexed types using refinements
+    is quite common in F*.
+
+  * ``concat``, a utility to concatenate strings, with its type
+    proving that the resulting string's length is the sum of the lengths
+    of the input strings.
+
+  * ``hash_size`` and ``hash``, a parameter of our development
+    describing the length in characters of a ``hash`` function. The F*
+    keyword ``assume`` allows you to assume the existence of a symbol
+    at a given type. Use it with care, since you can trivially prove
+    anything by including an ``assume nonsense : False``.
+
+  * The type of resources we store in the tree will just be
+    ``resource``, an alias for ``string``.
+
+.. literalinclude:: ../code/MerkleTree.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: preliminaries
+   :end-before: //SNIPPET_END: preliminaries
+
+
+Defining the Merkle tree
+........................
+
+The inductive type ``mtree`` below defines our Merkle tree. The type
+has *two* indices, such that ``mtree n h`` is the type of a Merkle
+tree of height ``n`` whose root node is associated with the hash
+``h``.
+
+Leaves are trees of height ``0`` and are constructed using ``L res``,
+where the hash associated with this node is just ``hash res``, the
+hash of the resource stored at the leaf.
+
+Internal nodes of the tree are constructed using ``N left right``,
+where both the ``left`` and ``right`` trees have the same height
+``n``, producing a tree of height ``n + 1``. More interestingly, the
+hash associated with ``N left right`` is ``hash (concat hl hr)``, the
+hash of the concatenation of hashes of the left and right subtrees.
+
+
+.. literalinclude:: ../code/MerkleTree.fst
+   :language: fstar
+   :start-after: //SNIPPET_START: mtree
+   :end-before: //SNIPPET_END: mtree
+
+In our previous examples like vectors, the index of the type
+abstracts, or summarizes, some property of the type, e.g., the
+length. This is also the case with ``mtree``, where the first index is
+an abstraction summarizing only the height of the tree; the second
+index, being a cryptographic hash, summarizes the entire contents of
+the tree.
+
+
+Accessing an element in the tree
+................................
+
+A resource identifier ``resource_id`` is a path in the tree from the
+root to the leaf storing that resource. A path is just a list of
+booleans describing whether to descend left or right from a node.
+
+Just like a regular binary tree, it's easy to access an element in the
+tree by specifying its ``resource_id``.
