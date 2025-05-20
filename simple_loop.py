@@ -43,11 +43,11 @@ async def async_chat(team: RoundRobinGroupChat, prompt: str, file_content: str =
                 # Original message handling
                 if "FunctionCall" in str(message.content):
 
-                  with open("./temp_files/Test.fst", "r") as f:
-                    f.seek(0)
-                    code = f.read()
-                    st.code(code, language="C")
-                    # Keep the original warning for debugging
+                #   with open("./temp_files/Test.fst", "r") as f:
+                #     f.seek(0)
+                #     code = f.read()
+                #     st.code(code, language="C")
+                #     # Keep the original warning for debugging
                     st.warning("Calling compile_fstar_code....")
                 elif "FunctionExecutionResult" in str(message.content):
                     pass
@@ -60,11 +60,11 @@ async def async_chat(team: RoundRobinGroupChat, prompt: str, file_content: str =
                     # Force flush any file buffers
      
                     
-                    with open("./temp_files/Test.fst", "r") as f:
-                        # Ensure we're reading from the start of file
-                        f.seek(0)
-                        code = f.read()
-                        st.code(code, language="C")
+                    # with open("./temp_files/Test.fst", "r") as f:
+                        # # Ensure we're reading from the start of file
+                        # f.seek(0)
+                        # code = f.read()
+                        # st.code(code, language="C")
                 elif "error occurred" in str(message.content):
                     st.error(str(message.content))
                 else:
