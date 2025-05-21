@@ -43,11 +43,11 @@ async def async_chat(team: RoundRobinGroupChat, prompt: str, file_content: str =
                 # Original message handling
                 if "FunctionCall" in str(message.content):
 
-                  with open("./temp_files/Test.fst", "r") as f:
-                    f.seek(0)
-                    code = f.read()
-                    st.code(code, language="C")
-                    # Keep the original warning for debugging
+                #   with open("./temp_files/Test.fst", "r") as f:
+                #     f.seek(0)
+                #     code = f.read()
+                #     st.code(code, language="C")
+                #     # Keep the original warning for debugging
                     st.warning("Calling compile_fstar_code....")
                 elif "FunctionExecutionResult" in str(message.content):
                     pass
@@ -60,11 +60,11 @@ async def async_chat(team: RoundRobinGroupChat, prompt: str, file_content: str =
                     # Force flush any file buffers
      
                     
-                    with open("./temp_files/Test.fst", "r") as f:
-                        # Ensure we're reading from the start of file
-                        f.seek(0)
-                        code = f.read()
-                        st.code(code, language="C")
+                    # with open("./temp_files/Test.fst", "r") as f:
+                        # # Ensure we're reading from the start of file
+                        # f.seek(0)
+                        # code = f.read()
+                        # st.code(code, language="C")
                 elif "error occurred" in str(message.content):
                     st.error(str(message.content))
                 else:
@@ -122,25 +122,26 @@ def main() -> None:
         with st.chat_message("user"):
             print("User: ", prompt)
             st.markdown(prompt)
-        with st.spinner("🔎 Retrieving relevant information with GraphRAG..."):
-            # Create and run the event loop for GraphRAG query
-            #loop = get_or_create_eventloop()
-            #rag_output = "Summarize F* language syntax, guidelines and few-shot examples related to the following query:" + prompt
-            time.sleep(5)
-            with open("./temp_files/list_rag.md", "r") as f:
-                rag_output = f.read()
-            print("rag:", rag_output)
-        if rag_output:
-            st.success("✅ Retrieval successful ✅")
-            with st.expander("📚 Retrieved Context", expanded=True):
-                st.markdown("""
-                    <div style="
-                        background-color: #f0f2f6;
-                        padding: 10px;
-                        border-radius: 5px;">
-                        {}
-                    </div>
-                    """.format(rag_output), unsafe_allow_html=True)
+        # with st.spinner("🔎 Retrieving relevant information with GraphRAG..."):
+        #     # Create and run the event loop for GraphRAG query
+        #     #loop = get_or_create_eventloop()
+        #     #rag_output = "Summarize F* language syntax, guidelines and few-shot examples related to the following query:" + prompt
+        #     time.sleep(5)
+        #     with open("./temp_files/list_rag.md", "r") as f:
+        #         rag_output = f.read()
+        #     print("rag:", rag_output)
+        # if rag_output:
+        #     st.success("✅ Retrieval successful ✅")
+        #     with st.expander("📚 Retrieved Context", expanded=True):
+        #         st.markdown("""
+        #             <div style="
+        #                 background-color: #f0f2f6;
+        #                 padding: 10px;
+        #                 border-radius: 5px;">
+        #                 {}
+        #             </div>
+        #             """.format(rag_output), unsafe_allow_html=True)
+        rag_output = ""
         final_prompt = prompt + "\n\n Here is some relevant context which might be helpful, but incomplete for the task."+ rag_output
         print("Final:", final_prompt)
         # Get or create event loop and run async chat
