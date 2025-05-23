@@ -34,14 +34,6 @@ recursion and divergence, as well as an open system of user-defined
 effects, with examples including state, exceptions, concurrency,
 algebraic effects, and several others.
 
-- A built-in encoding of a classical fragment of F*'s logic into the
-first order logic of an SMT solver, allowing many proofs to be
-automatically discharged.
-
-- A reflection within F* of the syntax and proof state of F*, enabling
-Meta-F* programs to manipulate F* syntax and proof goals and for
-users to build proofs interactively with tactics.
-
 In practice, rather than a single language, the F* ecosystem is also a
 collection of domain-specific languages (DSLs). A common use of F* is
 to embed within it programming languages at different levels of
@@ -56,30 +48,6 @@ implicit dynamic frames; and a custom backend (Karamel) to compile
 Low* programs to C for further compilation by off-the-shelf C
 compilers.
 
-- EverParse, a shallow embedding of a DSL (layered on top of the Low*
-DSL) of parser and serializer combinators, for low-level binary
-formats.
-
-- Vale, a deeply embedded DSL for structured programming in a
-user-defined assembly language, with a Hoare logic for total
-correctness, and a printer to emit verified programs in a assembly
-syntax compatible with various standard assemblers.
-
-- Steel, a shallow embedding of concurrency as an effect in F*, with
-an extensible concurrent separation logic for partial correctness as
-a core program logic, and proof automation built using a combination
-of Meta-F* tactics, higher-order unification, and SMT.
-
-- Pulse, a successor of Steel, a DSL with custom syntax and
-typechecking algorithm, providing proofs in a small but highly
-expressive core logic for mutable state and concurrency called
-PulseCore, formalized entirely in terms of pure and ghost functions
-in F*.
-
-To get a taste of F*, let's dive right in with some examples. At this
-stage, we don't expect you to understand these examples in detail,
-though it should give you a flavor of what is possible with F*.
-
 Dependently typed programming enables one to more precisely capture
 properties and invariants of a program using types. Here's a classic
 example: the type vec a n represents an n -dimensional vector
@@ -90,7 +58,6 @@ inductively defined definitions of types.
 type vec (a:Type) : nat -> Type =
   | Nil : vec a 0
   | Cons : #n:nat -> hd:a -> tl:vec a n -> vec a (n + 1)
-
 
 Operations on a vectors can be given types that describe their
 behavior in terms of vector lengths.
@@ -105,7 +72,6 @@ let rec append #a #n #m (v1:vec a n) (v2:vec a m)
     | Nil -> v2
     | Cons hd tl -> Cons hd (append tl v2)
 
-
 Of course, once a function like append is defined, it can be used
 to define other operations and its type helps in proving further
 properties. For example, it's easy to show that reversing a vector
@@ -117,7 +83,6 @@ let rec reverse #a #n (v:vec a n)
     | Nil -> Nil
     | Cons hd tl -> append (reverse tl) (Cons hd Nil)
 
-
 Finally, to get an element from a vector, one can program a selector
 whose type also includes a refinement type to specify that the index i is less than the length of the vector.
 
@@ -126,7 +91,6 @@ let rec get #a #n (i:nat{i < n}) (v:vec a n)
   = let Cons hd tl = v in
     if i = 0 then hd
     else get (i - 1) tl
-
 
 While examples like this can be programmed in other dependently typed
 languages, they can often be tedious, due to various technical
@@ -211,33 +175,6 @@ and a doing a proof corresponds to providing an implementation of that
 signature. Proving theorems can take a fair bit of work by a human and
 F* seeks to reduce that burden, using a variety of techniques.
 
-SMT Solving
-
-Proving even a simple program often involves proving dozens or
-hundreds of small facts, e.g., proving that bounded arithmetic doesn't
-overflow, or that ill-defined operations like divisions by zero never
-occur. All these little proofs can quickly overwhelm a user.
-
-The main workhorse for proofs in F* is an automated theorem prover,
-known as a Satisfiability Modulo Theories , or SMT, solver. The F*
-toolchain integrates the Z3 SMT Solver .
-
-By default, the F* typechecker collects all the facts that must be
-proven in a program and encodes them to the SMT solver, an engine that
-is capable of solving problems in various combinations of mathematical
-logics-F* encodes problems to Z3 in a combination of first-order
-logic, with uninterpreted functions and integer arithmetic.
-
-Z3 is remarkably effective at solving the kinds of problems that F*
-generates for it. The result is that some F* programs enjoy a high
-level of automation, e.g., in memcpy , we specified a pre- and
-postcondition and a loop invariant, and the system took care of all
-the remaining proofs.
-
-That said, Z3 cannot solve all problems that F* feeds to it. As such,
-F* offers several other mechanisms with varying levels of user
-control.
-
 Symbolic computation
 
 SMT solvers are great at proofs that involve equational rewriting, but
@@ -280,25 +217,8 @@ When proving a program ``e`` correct, one starts by specifying the
 properties one is interested in as a type ``t`` and then trying to
 convince F* that ``e`` has type ``t``, i.e., deriving ``e : t``.
 
-The idea of using a type to specify properties of a program has deep
-roots in the connections between logic and computation. You may find
-it interesting to read about `propositions as types
-<https://cacm.acm.org/magazines/2015/12/194626-propositions-as-types/fulltext>`_,
-a concept with many deep mathematical and philosophical
-implications. For now, it suffices to think of a type ``t`` as a
-specification, or a statement of a theorem, and ``e : t`` as
-computer-checkable claim that the term ``e`` is a proof of the theorem
-``t``.
-
 Equality
 ========
-
-Equality is a subtle issue that pervades the design of all dependent
-type theories, and F* is no exception. In this first chapter, we
-briefly touch upon two different kinds of equality in F*, providing
-some basic information sufficient for the simplest usages. In a
-:ref:`subsequent chapter <Part2_equality>`, we'll cover equality in
-much greater depth.
 
 Decidable equality and ``eqtype``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -330,9 +250,7 @@ contain a sub-term that is a function, then ``t`` cannot be an
 
 As such, the type of the decidable equality operator is
 
-.. code-block:: fstar
-
-   val ( = ) (#a:eqtype) (x:a) (y:a) : bool
+val ( = ) (#a:eqtype) (x:a) (y:a) : bool
 
 That is, ``x = y`` is well-typed only when ``x : a`` and ``y : a`` and
 ``a : eqtype``.
@@ -346,129 +264,10 @@ proposition ``e₁ == e₂`` asserts the (possibly undecidable) equality
 of ``e₁`` and ``e₂``. The type of the propositional equality operator
 is shown below:
 
-.. code-block:: fstar
-
-   val ( == ) (#a:Type) (x:a) (y:a) : prop
-
-Unlike decidable equality ``(=)``, propositional equality is defined
-for all types. The result type of ``(==)`` is ``prop``, the type of
-propositions. We'll learn more about that in the :ref:`next chapter
-<Part1_prop_assertions>`.
-
-Executing programs
-==================
-
-We've been through several chapters already, having learned many core
-concepts of F*, but we have yet to see how to compile and execute a
-program, since our focus so far has been on F*'s logic and how to
-prove properties about programs.
-
-F* offers several choices for executing a program, which we cover
-briefly here, using `Quicksort <../code/Part1.Quicksort.Generic.fst>`_
-as a running example.
-
-
-Interpreting F* programs
-^^^^^^^^^^^^^^^^^^^^^^^^
-
-As mentioned in the :ref:`capsule summary
-<Part1_symbolic_computation>`, F* includes an engine (called the
-*normalizer*) that can symbolically reduce F* computations. We'll see
-many more uses of F*'s normalizer as we go, but one basic usage of it
-is to use it to interpret programs.
-
-Invoking the interpreter is easy using :ref:`fstar-mode.el
-<Part1_editors>` in emacs. In emacs, go to the F* menu, then to
-*Interactive queries*, then choose *Evaluate an expression* (or type
-C-c C-s C-e): this prompts you to enter an expression that you want to
-evaluate: type ``sort ( <= ) [4;3;2;1]`` and then press "Enter". You
-should see the following output: ``sort ( <= ) [4;3;2;1]``
-:math:`\downarrow\beta\delta\iota\zeta` ``[1; 2; 3; 4] <: Prims.Tot
-(list int)``, saying that the input term reduced to ``[1; 2; 3; 4]``
-of type ``Tot (list int)``.
-
-Producing an OCaml library
-..........................
-
-To extract OCaml code from a F* program use the command-line options,
-as shown below:
-
-.. code-block::
-
-   fstar --codegen OCaml --extract Part1.Quicksort --odir out Part1.Quicksort.Generic.fst
-
-* The ``--codegen`` option tells F* to produce OCaml code
-
-* The ``--extract`` option tells F* to only extract all modules in the given namespace, i.e., in this case, all modules in ``Part1.Quicksort``
-
-* The ``--odir`` option tells F* to put all the generated files into the specified directory; in this case ``out``
-  
-* The last argument is the source file to be checked and extracted
-
-Some points to note about the extracted code:
-
-* F* extracts only those definitions that correspond to executable
-  code. Lemmas and other proof-only aspects are erased. We'll learn
-  more about erasure in a later chapter.
-
-* The F* types are translated to OCaml types. Since F* types are more
-  precise than OCaml types, this translation process necessarily
-  involves a loss in precision. For example, the type of total orders
-  in ``Part1.Quicksort.Generic.fst`` is:
-
-  .. code-block:: fstar
-
-     let total_order_t (a:Type) = f:(a -> a -> bool) { total_order f }
-
-  Whereas in OCaml it becomes
-
-  .. code-block:: 
-
-     type 'a total_order_t = 'a -> 'a -> Prims.bool
-  
-
-  This means that you need to be careful when calling your extracted
-  F* program from unverified OCaml code, since the OCaml compiler will
-  not complain if you pass in some function that is not a total order
-  where the F* code expects a total order.
+val ( == ) (#a:Type) (x:a) (y:a) : prop
 
 Getting off the ground
 ======================
-
-To start writing some F* programs, we'll need to learn some basics
-about the syntax of the language and some core concepts of types and
-functions.
-
-.. _Part1_editors:
-
-Text Editors
-^^^^^^^^^^^^
-
-F* can be used as a command line tool with any text editor. If you're
-viewing this in the interactive online tutorial, you can use the
-`Ace-based <https://ace.c9.io/>`_ text editor alongside, which
-provides some basic conveniences like syntax highlighting. However,
-beyond casual use, most users of F* rely on one of the follwing IDE
-plugins.
-
-  * `fstar-mode.el <https://github.com/FStarLang/fstar-mode.el>`_,
-    which provides several utilities for interactively editing and
-    checking F* files in emacs.
-
-  * `fstar-vscode-assistant
-    <https://github.com/FStarLang/fstar-vscode-assistant>`_, which
-    also provides interactive editing and checking support in VS Code.
-
-The main benefit to using these IDE plugins is that they allow you to
-incrementally check just the changing suffix of an F* file, rather
-than rechecking the entire file in batch mode. They also provide
-standard things like jumping to definitions, type of a symbol etc.
-
-Both these plugins rely on a generic but custom interaction protocol
-implemented by the F* compiler. It should be possible to implement IDE
-support similar to fstar-mode.el or fstar-vscode-assistant in your
-favorite plugin-capable editor.
-
 
 Basic syntactic structure
 ^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -491,24 +290,6 @@ when programming with total functions are
 
 * possibly recursive definitions (let bindings, ``let [rec] f = e``)
 * and, inductive type definitions (datatypes, ``type t = | D1 : t1 | ... | Dn : tn``)
-
-In later sections, we'll see two other kinds of definition:
-user-defined indexed effects and sub-effects.
-
-Comments
-^^^^^^^^
-
-Block comments are delimited by ``(*`` and ``*)``. Line comments begin
-with ``//``.
-
-.. code-block:: fstar
-
-  (* this is a
-     block comment *)
-
-
-  //This is a line comment
-
 
 Primitives
 ^^^^^^^^^^
@@ -548,14 +329,11 @@ Conditionals
 
 You can, of course, branch on a boolean with ``if/then/else``
 
-.. code-block:: fstar
+if b then 1 else 0
 
-  if b then 1 else 0
-
-  if b1 && b2 || b3
-  then 17
-  else 42
-
+if b1 && b2 || b3
+then 17
+else 42
 
 Integers
 ........
@@ -579,22 +357,13 @@ precedence.
 * ``>`` : Greater than (infix)
 * ``>=``: Greater than or equal (infix)
 
-.. note::
-   
-    F* follows the OCaml style of no negative integer literals,
-    instead negate a positive integer like ``(- 1)``.
-    
-.. _Part1_ch1_boolean_refinements:
-
 Boolean refinement types
 ^^^^^^^^^^^^^^^^^^^^^^^^
 
 The F* core library, ``Prims``, defines the type of
 natural numbers as follows
 
-.. code-block:: fstar
-
-       let nat = x:int{x >= 0}
+let nat = x:int{x >= 0}
 
 This is an instance of a boolean refinement type, whose general form
 is ``x:t { e }`` where ``t`` is a type, and ``e`` is a ``bool``-typed term
@@ -609,38 +378,12 @@ element of the set ``{0, 1, 2, 3, ...}``.
 But, there's nothing particularly special about ``nat``. You can define
 arbitrary refinements of your choosing, e.g.,
 
-.. code-block:: fstar
-
   let empty = x:int { false } //the empty set
   let zero = x:int{ x = 0 } //the type containing one element `0`
   let pos = x:int { x > 0 } //the positive numbers
   let neg = x:int { x < 0 } //the negative numbers
   let even = x:int { x % 2 = 0 } //the even numbers
   let odd = x:int { x % 2 = 1 } //the odd numbers
-
-If you're coming from a language like C or Java where a type primarily
-describes some properties about the representation of data in memory,
-this view of types as describing arbitrary sets of values may feel a
-bit alien. But, let it sink in a bit---types that carve out precise
-sets of values will let you state and check invariants about your
-programs that may otherwise have only been implicit in your code.
-
-.. note::
-
-   Refinement types in F* trace their lineage to `F7
-   <https://www.microsoft.com/en-us/research/project/f7-refinement-types-for-f/>`_,
-   a language developed at Microsoft Research c. 2007 -- 2011. `Liquid
-   Haskell <https://ucsd-progsys.github.io/liquidhaskell-blog/>`_ is
-   another language with refinement types. Those languages provide
-   additional background and resources for learning about refinement
-   types.
-
-   Boolean refinements are a special case of a more powerful form of
-   propositional refinement type in F*. Refinement types, in
-   conjunction with dependent function types, are, in principle,
-   sufficient to encode many kinds of logics for program
-   correctness. However, refinement types are just one among several
-   tools in F* for program specification and proof.
 
 
 Refinement subtyping
@@ -758,16 +501,12 @@ want this to define a function once and to call it many times. For
 example, all of the following are synonyms and bind the lambda term
 ``fun x -> x + 1`` to the name ``incr``
 
-.. code-block:: fstar
-
   let incr = fun (x:int) -> x + 1
   let incr (x:int) = x + 1
   let incr x = x + 1
 
 Functions can take several arguments and the result type of a function
 can also be annotated, if desired
-
-.. code-block:: fstar
 
   let incr (x:int) : int = x + 1
   let more_than_twice (x:int) (y:int) : bool = x > y + y
@@ -783,21 +522,12 @@ result type of a named function definition.
    ascription*. An ascription instructs F* to check that the
    term ``e`` has the type ``t``. For example, we could have written
 
-.. code-block:: fstar
-
      let incr = fun (x:int) -> (x + 1 <: int)
-
 
 Recursive functions
 ...................
 
-Recursive functions in F* are always named. To define them, one uses
-the ``let rec`` syntax, as shown below.
-
-.. literalinclude:: ../code/Part1.GettingOffTheGround.fst
-   :language: fstar
-   :start-after: SNIPPET_START: factorial
-   :end-before: SNIPPET_END: factorial
+Recursive functions in F* are always named.
 
 This syntax defines a function names ``factorial`` with a single
 parameter ``n:nat``, returning a ``nat``. The definition of factorial
@@ -811,10 +541,6 @@ case, the proof of termination is automatic.
    Notice the use of `open FStar.Mul` in the example above. This
    brings the module `FStar.Mul` into scope and resolves the symbol
    ``*`` to integer multiplication.
-
-F* also supports mutual recursion. We'll see that later.
-
-.. _Part1_ch1_arrows:
 
 Arrow types
 ^^^^^^^^^^^
@@ -851,10 +577,6 @@ languages.
    call to fail to return due to resource exhaustion, e.g., running
    out of memory. Later, as we look at :ref:`effects <effects>`, we
    will see that F* also supports writing non-terminating functions.
-
-
-.. _Part1_ch1_arrow_notations:
-
 
 Some examples and common notation
 .................................
@@ -924,194 +646,9 @@ Some examples and common notation
    adding an annotation on the intermediate arrow, though this is not
    customary.
 
-Exercises
-^^^^^^^^^
-
-This first example is just to show you how to run the tool and
-interpret its output.
-
-.. literalinclude:: ../code/Part1.GettingOffTheGround.fst
-   :language: fstar
-   :start-after: SNIPPET_START: sample
-   :end-before: SNIPPET_END: sample
-
 Notice that the program begins with a ``module`` declaration. It
 contains a single definition named ``incr``. Definitions that appear
 at the scope of a module are called "top-level" definitions.
-
-Many types for ``incr``
-.......................
-
-Here are some types for ``incr``, including some types that are valid
-and some others that are not.
-
-This type claims that ``incr`` result is
-greater than its argument and F* agrees—remember, the ``int`` type is
-unbounded, so there's no danger of the addition overflowing.
-
-.. literalinclude:: ../code/Part1.GettingOffTheGround.fst
-   :language: fstar
-   :start-after: SNIPPET_START: ex1.1
-   :end-before: SNIPPET_END: ex1.1
-
-This type claims that ``incr`` always returns a natural number, but it
-isn't true, since incrementing a negative number doesn't always
-produce a non-negative number.
-
-.. literalinclude:: ../code/Part1.GettingOffTheGround.fst
-   :language: fstar
-   :start-after: SNIPPET_START: ex1.2
-   :end-before: SNIPPET_END: ex1.2
-
-F* produces the following error message::
-
-  Sample.fst(11,26-11,31): (Error 19) Subtyping check failed; expected type
-  Prims.nat; got type Prims.int; The SMT solver could not prove the query, try to
-  spell your proof in more detail or increase fuel/ifuel (see also prims.fst(626,
-  18-626,24))
-  Verified module: Sample
-  1 error was reported (see above)
-
-**Source location**
-
-The error message points to ``Sample.fst(11,26-11,31)``, a source
-range mentioned the file name, a starting position (line, column), and
-an ending position (line, column). In this case, it highlights the
-``x + 1`` term.
-
-**Severity and error code**
-
-The ``(Error 19)`` mentions a severity (i.e., ``Error``, as opposed
-to, say, ``Warning``), and an error code (``19``).
-
-**Error message**
-
-The first part of the message stated what you might expect::
-
-  Subtyping check failed; expected type Prims.nat; got type Prims.int
-
-The rest of the message provides more details, which we'll ignore for
-now, until we've had a chance to explain more about how F* interacts
-with the SMT solver. However, one part of the error message is worth
-pointing out now::
-
-  (see also prims.fst(626,18-626,24))
-
-Error messages sometimes mention an auxiliary source location in a
-"see also" parenthetical. This source location can provide some more
-information about why F* rejected a program—in this case, it points to
-the constraint ``x>=0`` in the definition of ``nat`` in ``prims.fst``,
-i.e., this is the particular constraint that F* was not able to prove.
-
-So, let's try again. Here's another type for ``incr``, claiming that
-if its argument is a natural number then so is its result. This time
-F* is happy.
-
-.. literalinclude:: ../code/Part1.GettingOffTheGround.fst
-   :language: fstar
-   :start-after: SNIPPET_START: ex1.3
-   :end-before: SNIPPET_END: ex1.3
-
-Sometimes, it is convenient to provide a type signature independently
-of a definition. Below, the ``val incr4`` provides only the signature
-and the subsequent ``let incr4`` provides the definition—F* checks
-that the definition is compatible with the signature.
-
-.. literalinclude:: ../code/Part1.GettingOffTheGround.fst
-   :language: fstar
-   :start-after: SNIPPET_START: ex1.4
-   :end-before: SNIPPET_END: ex1.4
-
-Try writing some more types for ``incr``.
-(`Load exercise <../code/exercises/Part1.GettingOffTheGround.fst>`_.)
-
-.. container:: toggle
-
-    .. container:: header
-
-       **Some answers**
-
-    .. literalinclude:: ../code/Part1.GettingOffTheGround.fst
-       :language: fstar
-       :start-after: SNIPPET_START: incr_types
-       :end-before: SNIPPET_END: incr_types
-
-
-Computing the maximum of two integers
-.....................................
-
-Provide an implementation of the following signature::
-
-  val max (x:int) (y:int) : int
-
-There are many possible implementations that satisfy this signature,
-including trivial ones like::
-
-  let max x y = 0
-
-Provide an implementation of ``max`` coupled with a type that is
-precise enough to rule out definitions that do not correctly return
-the maximum of ``x`` and ``y``.
-
-.. container:: toggle
-
-    .. container:: header
-
-       **Some answers**
-
-    .. literalinclude:: ../code/Part1.GettingOffTheGround.fst
-       :language: fstar
-       :start-after: SNIPPET_START: max
-       :end-before: SNIPPET_END: max
-
-
-More types for factorial
-........................
-
-Recall the definition of ``factorial`` from earlier.
-
-.. literalinclude:: ../code/Part1.GettingOffTheGround.fst
-   :language: fstar
-   :start-after: SNIPPET_START: factorial
-   :end-before: SNIPPET_END: factorial
-
-Can you write down some more types for factorial?
-
-.. container:: toggle
-
-    .. container:: header
-
-       **Some answers**
-
-    .. literalinclude:: ../code/Part1.GettingOffTheGround.fst
-       :language: fstar
-       :start-after: SNIPPET_START: factorial_answers
-       :end-before: SNIPPET_END: factorial_answers
-
-Fibonacci
-.........
-
-Here's a doubly recursive function:
-
-.. literalinclude:: ../code/Part1.GettingOffTheGround.fst
-   :language: fstar
-   :start-after: SNIPPET_START: fibonacci
-   :end-before: SNIPPET_END: fibonacci
-
-What other types can you give to it?
-
-.. container:: toggle
-
-    .. container:: header
-
-       **Some answers**
-
-    .. literalinclude:: ../code/Part1.GettingOffTheGround.fst
-       :language: fstar
-       :start-after: SNIPPET_START: fibonacci_answers
-       :end-before: SNIPPET_END: fibonacci_answers
-
-.. _Part1_ch3:
 
 Inductive types and pattern matching
 ====================================
@@ -1121,13 +658,6 @@ types are called *inductive types*, or, more informally,
 datatypes. We'll also learn how to define functions over these
 inductive types by pattern matching and to prove properties about
 them.
-
-.. note::
-
-   We'll only cover the most basic forms of inductive types here. In
-   particular, the types we show here will not make use of indexing or
-   any other form of dependent types---we'll leave that for a later
-   chapter.
 
 Enumerations
 ^^^^^^^^^^^^
@@ -2136,53 +1666,6 @@ We've defined a function that can be applied to a value ``x:a`` for
 any type ``a``. The last line there maybe requires a second read: we
 instantiated ``id`` to ``int -> int`` and then applied it to ``id``
 instantiated to ``int``.
-
-Exercises
-^^^^^^^^^
-
-Let's try a few simple exercises. `Click here
-<../code/exercises/Part1.Poly.fst>`_ for the exercise file.
-
-
-Try defining functions with the following signatures:
-
-.. literalinclude:: ../code/Part1.Poly.fst
-   :language: fstar
-   :start-after: //SNIPPET_START: sig apply_and_compose
-   :end-before: //SNIPPET_END: sig apply_and_compose
-
-.. container:: toggle
-
-    .. container:: header
-
-       **Answer**
-
-    .. literalinclude:: ../code/Part1.Poly.fst
-       :language: fstar
-       :start-after: //SNIPPET_START: apply_and_compose
-       :end-before: //SNIPPET_END: apply_and_compose
-
-How about writing down a signature for ``twice``:
-
-.. literalinclude:: ../code/Part1.Poly.fst
-   :language: fstar
-   :start-after: //SNIPPET_START: def twice
-   :end-before: //SNIPPET_END: def twice
-
-.. container:: toggle
-
-    .. container:: header
-
-       **Answer**
-
-    .. literalinclude:: ../code/Part1.Poly.fst
-       :language: fstar
-       :start-after: SNIPPET_START: sig twice
-       :end-before: SNIPPET_END: sig twice
-
-It's quite tedious to have to explicitly provide that first type
-argument to ``id``. Implicit arguments and type inference will help,
-as we'll see, next.
 
 
 Type inference: Basics
