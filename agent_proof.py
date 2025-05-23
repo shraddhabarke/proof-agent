@@ -10,7 +10,7 @@ from streamlit_elements import elements, editor
 from streamlit_monaco import st_monaco
 from autogen_core.tools import FunctionTool
 from tools.agent_tools import compile_fstar_code
-from graphrag_interface import query_graphrag
+# from graphrag_interface import query_graphrag
 from typing import Sequence
 from autogen_agentchat.messages import BaseAgentEvent, BaseChatMessage
 
@@ -30,12 +30,11 @@ class Agent:
         1. Generating correct and syntactically valid F* code based on the proof sketch provided by the proof agent.
         2. Analyzing the generated F* code for syntactic errors and incorporate compiler feedback.
         2. Incorporating error messages and hints from the F* compiler to identify and fix issues.
+        3. If you have any verification errors, you must ask the PROOF agent for help
         3. Proposing corrections to ensure the code strictly adheres to F* syntax rules.
-        4. Consulting the official F* tutorial at https://fstar-lang.org/tutorial/ and the guidelines below for best practices.
         5. for this task, always call the module 'Test'
         6. always print the code you generate and explain it
         If the compiler gives you an error, you must fix it. The task is not complete until the f* code compiles.
-        Before calling any function, you must first generate a proof and specification sketch. thinking step by step.   
         You must start with every response by saying: # Syntax Agent """
 
         # Create system message for the F* Proof Expert
@@ -48,26 +47,15 @@ class Agent:
         
         You must start your task by thinking through the specifications and format of the ultimate solution.   
         Before calling any function, you must first generate a proof and specification sketch. thinking step by step.           
-        Always explain the proof sketch you are generating.
-        You must start with every response by saying: # Proof Reasoning Model
+        Always explain the proof sketch you are generating. The syntax agent will ask you questions if it encourters verification errors.
+        You must start with every response by saying: # Proof Agent
         """
-
-        # # Create system message for the F* Iterative Refinement Agent
-        # system_message_refinement = f"""
-        # You are an expert in iterative refinement and proof optimization in F*. Your responsibilities include:
-        # 1. Integrating the feedback provided by both the F* Syntax Expert and the F* Proof Expert Agents.
-        # 2. Iteratively refining the F* code so that it is syntactically correct and aligns with the specification.
-        # 3. Prioritizing early drafting of specifications, deliberating on the most suitable representations (e.g., choosing between Seq and List) to balance efficiency with proof complexity.
-        # 4. Carefully considering the choice of quantifiers when necessary, as this can simplify proofs.
-        # 5. Aligning the structure of the specification with the implementation, such as setting up convenient 'spec' functions for each code portion.
-        # 6. Consulting the official F* tutorial at https://fstar-lang.org/tutorial/ to ensure the final version adheres to best practices.
-        # """
 
         compile_fstar = FunctionTool(compile_fstar_code, description="Compile F* code")
 
         # Create the three agents with their respective roles and prompts
         self.syntax_agent = AssistantAgent(
-            name="fstar_syntax_expert",
+            name="syntax_agent",
             description ="F* Syntax Expert",
             model_client=self.model_client,
             system_message=system_message_syntax,
@@ -75,22 +63,13 @@ class Agent:
         )
 
         self.proof_agent = AssistantAgent(
-            name="fstar_proof_expert",
+            name="proof_agent",
             description ="F* Proof Expert",
             model_client=self.proof_model_client,
             system_message=system_message_proof,
-            tools=[compile_fstar]
         )
-
-        # self.refinement_agent = AssistantAgent(
-        #     name="fstar_refinement_agent",
-        #     model_client=self.refinement_model_client,
-        #     system_message=system_message_refinement,
-        #     tools=[compile_fstar]
-        # )
-
-
-        selector_prompt = """Select an agent to perform task. If this is the first message, then the f* proof agent should start first and come up with a proof sketch. Afterwards the syntax agent will come in and turn the sketch into a real syntactically correct program
+ 
+        selector_prompt = """Select an agent to perform task. 
 
         {roles}
 
@@ -98,14 +77,23 @@ class Agent:
         {history}
 
         Read the above conversation, then select an agent from {participants} to perform the next task.
-        THe task is not complete until the F* code verifies.
+
+        the general plan is:
+        1. The proof_agent will generate a proof sketch, starting from 1) selecting the correct representation, 2) reasonong about the specifications (pre, post conditions, refinements). 3) identifying what relevant lemmas you might use in the proof sketch.
+        2. The syntax_agent will take the proof sketch and turn it into a real syntactically correct program.
+        3. The syntax_agent will then fix the code if there are compiler errors or ask the proof agent for help on verification errors
+        4. The process continues until the code verifies and all verification conditions are discharged successfully.
+        5. The syntax_agent will then print the final code and explain it.
+
         """
 
 
         def selector_func(messages: Sequence[BaseAgentEvent | BaseChatMessage]) -> str | None:
-                if len(messages) == 0:
-                    return "Proof agent"
-                return None
+            if messages[-1].source == "user":
+                return self.proof_agent.name  # Use the actual agent name
+            if messages[-1].source == self.proof_agent.name:
+                return self.syntax_agent.name
+            return None
 
         # Create the agent team
         text_termination = TextMentionTermination("All verification conditions discharged successfully") # TODO: change termination message
@@ -114,30 +102,11 @@ class Agent:
             termination_condition=text_termination,
             selector_prompt=selector_prompt,
             allow_repeated_speaker=True,
-            model_client=self.proof_model_client,
+            model_client=self.model_client,
             selector_func=selector_func,
         )
         
 
-    def display_diff(self, original: str, modified: str) -> str:
-        """
-        Display a diff view of the original and modified code using Streamlit Monaco editor.
-        
-        Args:
-            original (str): The original code
-            modified (str): The modified/refactored code
-        
-        Returns:
-            str: The modified code after displaying the diff
-        """
-        st.markdown("# Diff of Refactored and Original Code")
-        # with elements("monaco_editors"):
-        #     editor.MonacoDiff(
-        #         original=original,
-        #         modified=modified,
-        #         height=600,
-        #     )
-        return modified
 
     async def chat(self, prompt: str) -> str:
         """Legacy method for backward compatibility"""

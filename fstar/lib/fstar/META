@@ -1,0 +1,117 @@
+package "compiler" (
+  directory = "compiler"
+  description = ""
+  requires =
+  "batteries
+   
+   
+   
+   dynlink
+   
+   
+   
+   menhirLib
+   
+   
+   
+   mtime
+   
+   
+   
+   mtime.clock
+   
+   
+   
+   mtime.clock.os
+   
+   
+   
+   pprint
+   
+   
+   
+   ppx_deriving.runtime
+   
+   
+   
+   ppx_deriving_yojson.runtime
+   
+   
+   
+   ppxlib
+   
+   
+   
+   ppxlib.ast
+   
+   
+   
+   process
+   
+   
+   
+   sedlex
+   
+   
+   
+   stdint
+   
+   
+   
+   yojson
+   
+   
+   
+   zarith"
+  archive(byte) = ""
+  archive(native) = "fstarcompiler.cmxa"
+  plugin(byte) = ""
+  plugin(native) = "fstarcompiler.cmxs"
+  version = "71d8221"
+)
+package "lib" (
+  directory = "lib"
+  description = ""
+  requires =
+  "batteries
+   
+   
+   
+   pprint
+   
+   
+   
+   ppx_deriving.runtime
+   
+   
+   
+   ppx_deriving_yojson.runtime
+   
+   
+   
+   stdint
+   
+   
+   
+   yojson
+   
+   
+   
+   zarith"
+  archive(byte) = "fstar.cma"
+  archive(native) = "fstar.cmxa"
+  plugin(byte) = "fstar.cma"
+  plugin(native) = "fstar.cmxs"
+  version = "71d8221"
+)
+package "pluginlib" (
+  directory = "pluginlib"
+  description = ""
+  requires =
+  "fstar.compiler ppx_deriving.runtime ppx_deriving_yojson.runtime yojson"
+  archive(byte) = ""
+  archive(native) = "fstar_pluginlib.cmxa"
+  plugin(byte) = ""
+  plugin(native) = "fstar_pluginlib.cmxs"
+  version = "71d8221"
+)
