@@ -6,6 +6,8 @@ import asyncio
 import streamlit as st
 
 from graphrag.config.enums import ModelType
+from graphrag.config.enums import AuthType
+
 from graphrag.config.models.language_model_config import LanguageModelConfig
 from graphrag.language_model.manager import ModelManager
 from graphrag.query.indexer_adapters import (
@@ -18,19 +20,22 @@ from graphrag.query.structured_search.global_search.community_context import (
 )
 from graphrag.query.structured_search.global_search.search import GlobalSearch
 
-api_key=""
 llm_model = "gpt-4o-mini"
 
 config = LanguageModelConfig(
-    api_key=api_key,
-    type=ModelType.OpenAIChat,
+    type=ModelType.AzureOpenAIChat,
+    auth_type=AuthType.AzureManagedIdentity,
     model=llm_model,
     max_retries=20,
+    api_base="https://trapi.research.microsoft.com/redmond/interactive",
+    api_version="2025-03-01-preview",
+    deployment_name= "gpt-4o_2024-08-06"
 )
+
 model = ModelManager().get_or_create_chat_model(
     name="global_search",
-    model_type=ModelType.OpenAIChat,
-    config=config,
+    model_type=ModelType.AzureOpenAIChat,
+    config=config
 )
 
 token_encoder = tiktoken.encoding_for_model(llm_model)
@@ -111,4 +116,4 @@ async def query_graphrag(prompt: str) -> str:
 
 if __name__ == "__main__":
     print("Yay!")
-    #asyncio.run(main())
+    asyncio.run(query_graphrag("What is F*?"))
