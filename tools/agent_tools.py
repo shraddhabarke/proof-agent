@@ -11,10 +11,7 @@ def compile_fstar_code(code_str:str) -> str:
     :param code_str: The F* code as a string.
     :return: The output from the fstar.exe compilation process.
     """
-
-    return "success"
-
-    # test for now, since the module name must match the file name
+    # test for now, since the module name must match the file na
     file_name = f"Test.fst"
     directory = "temp_files"
     #in root directory
@@ -40,9 +37,7 @@ def compile_fstar_code(code_str:str) -> str:
 
 # result = compile_fstar_code("""
 # module Test
-# let rec f x =
-#     if x = 0 then 0
-#     else x + f (x - 1)
+# let rec f x = 0
 # """)
 # print(result)
 

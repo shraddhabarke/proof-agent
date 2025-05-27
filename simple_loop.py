@@ -8,7 +8,7 @@ from autogen_agentchat.conditions import ExternalTermination, TextMentionTermina
 from autogen_agentchat.teams import RoundRobinGroupChat
 from autogen_agentchat.ui import Console
 from autogen_core import CancellationToken
-from graphrag_interface import query_graphrag
+# from graphrag_interface import query_graphrag
 import time
 import json
 import ast
