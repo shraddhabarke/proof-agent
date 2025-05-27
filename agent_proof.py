@@ -26,7 +26,8 @@ from autogen_ext.memory.chromadb import ChromaDBVectorMemory, PersistentChromaDB
 class Agent:
     def __init__(self) -> None:
         self.model_client = setup_azure_client()
-        self.proof_model_client = setup_azure_client(model="o1_2024-12-17", model_family="o1")
+
+        self.proof_model_client = setup_azure_client(model="o3_2025-04-16", model_family="o3")
        
         with open("fstar_example_syntax.txt", "r") as f:
             syntax_example = f.read()
