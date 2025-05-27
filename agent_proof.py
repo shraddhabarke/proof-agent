@@ -19,7 +19,7 @@ import asyncio
 class Agent:
     def __init__(self) -> None:
         self.model_client = setup_azure_client()
-        self.proof_model_client = setup_azure_client(model="o3-mini_2025-01-31", model_family="o3")
+        self.proof_model_client = setup_azure_client(model="o3_2025-04-16", model_family="o3")
        
         # #fst_manual = asyncio.run(query_graphrag("Summarize F* language syntax, guidelines and few-shot examples related to the following query:"))
         #print(fst_manual)
