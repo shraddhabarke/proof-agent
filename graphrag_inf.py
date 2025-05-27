@@ -13,11 +13,14 @@ def run_graphrag_query(query):
             stderr=subprocess.PIPE,
             check=True
         )
+        output = result.stdout
         print("SUCCESS: Global Search Response:\n")
         print(result.stdout)
+        return output
     except subprocess.CalledProcessError as e:
         print("ERROR executing graphrag query:")
         print(e.stderr)
+        return None
 
 if __name__ == "__main__":
     run_graphrag_query("What is F*?")
