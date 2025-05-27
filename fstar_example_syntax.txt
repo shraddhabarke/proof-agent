@@ -326,3 +326,572 @@ noeq type rbtree =
 
 val proj: rbtree -> Pure rbtree' (requires True) (ensures (fun r -> balanced_rbtree' r))
 let proj tr = Mk?.tr tr
+
+==============================
+example 2: implement a binary tree in f*
+
+solution:
+
+module BinaryTrees
+
+type tree =
+  | Leaf : tree
+  | Node : root:int -> left:tree -> right:tree -> tree
+
+val size : tree -> Tot nat
+let rec size t =
+  match t with
+  | Leaf -> 0
+  | Node n t1 t2 -> 1 + size t1 + size t2
+
+val map : f:(int -> Tot int) -> tree -> Tot tree
+let rec map f t =
+  match t with
+  | Leaf -> Leaf
+  | Node n t1 t2 -> Node (f n) (map f t1) (map f t2)
+
+val map_size : f:(int -> Tot int) -> t:tree -> Lemma (size (map f t) = size t)
+let rec map_size f t =
+  match t with
+  | Leaf -> ()
+  | Node n t1 t2 -> map_size f t1; map_size f t2
+
+val find : p:(int -> Tot bool) -> tree -> Tot (option int)
+let rec find p t =
+  match t with
+  | Leaf -> None
+  | Node n t1 t2 -> if p n then Some n else
+                    if Some? (find p t1) then find p t1
+                                         else find p t2
+
+val find_some : p:(int -> Tot bool) -> t:tree ->
+  Lemma (None? (find p t) \/ p (Some?.v (find p t)))
+let rec find_some p t =
+  match t with
+  | Leaf -> ()
+  | Node n t1 t2 -> find_some p t1; find_some p t2
+
+let map_option f o = match o with
+                    | Some n -> Some (f n)
+                    | None   -> None
+
+let compose f1 f2 x = f1 (f2 x)
+
+val map_find : p:(int -> Tot bool) -> f:(int -> Tot int) -> t:tree ->
+  Lemma (find p (map f t) = map_option f (find (compose p f) t))
+let rec map_find p f t =
+  match t with
+  | Leaf -> ()
+  | Node n t1 t2 -> map_find p f t1; map_find p f t2
+
+val in_tree : int -> tree -> Tot bool
+let rec in_tree x t =
+  match t with
+  | Leaf -> false
+  | Node n t1 t2 -> x = n || in_tree x t1 || in_tree x t2
+
+val fold : (int -> 'a -> 'a -> 'a) -> 'a -> tree -> 'a
+let rec fold f a t =
+  match t with
+  | Leaf -> a
+  | Node n t1 t2 -> f n (fold f a t1) (fold f a t2)
+
+val fold_map : fm:(int -> int) -> ff:(int -> int -> int -> int) -> a:int -> t:tree ->
+  Lemma (fold ff a (map fm t) = fold (compose ff fm) a t)
+let rec fold_map fm ff a t =
+  match t with
+  | Leaf -> ()
+  | Node n t1 t2 -> fold_map fm ff a t1; fold_map fm ff a t2
+
+val size_fold : t:tree ->
+  Lemma (size t = fold #nat (fun _ s1 s2 -> 1 + s1 + s2) 0 t)
+let rec size_fold t =
+  match t with
+  | Leaf -> ()
+  | Node n t1 t2 -> size_fold t1; size_fold t2
+
+val in_tree_fold : x:int -> t:tree ->
+  Lemma (in_tree x t = fold (fun n b1 b2 -> x = n || b1 || b2) false t)
+let rec in_tree_fold x t =
+  match t with
+  | Leaf -> ()
+  | Node n t1 t2 -> in_tree_fold x t1; in_tree_fold x t2
+
+val find_fold : f:(int -> Tot bool) -> tree -> Tot (option (x:int{f x}))
+let find_fold f = fold #(option (x:int{f x}))
+                        (fun n o1 o2 -> if f n then Some n else
+                                        if Some? o1 then o1 else o2) None
+
+val revert : tree -> Tot tree
+let rec revert t =
+  match t with
+  | Leaf -> Leaf
+  | Node n t1 t2 -> Node n (revert t2) (revert t1)
+
+(* simpler than for lists because revert is symmetric, while List.rev is not *)
+val revert_involutive : t:tree -> Lemma (revert (revert t) = t)
+let rec revert_involutive t =
+  match t with
+  | Leaf -> ()
+  | Node n t1 t2 -> revert_involutive t1; revert_involutive t2
+
+(* again, much simpler than for lists *)
+val revert_injective : t1:tree -> t2:tree ->
+  Lemma (requires (revert t1 = revert t2)) (ensures (t1 = t2))
+let rec revert_injective t1 t2 =
+  match t1, t2 with
+  | Leaf, Leaf -> ()
+  | Node n1 t11 t12, Node n2 t21 t22 -> revert_injective t11 t21;
+                                      revert_injective t12 t22
+
+val revert_fold : t:tree ->
+  Lemma (revert t = fold (fun n t1 t2 -> Node n t2 t1) Leaf t)
+let rec revert_fold t =
+  match t with
+  | Leaf -> ()
+  | Node n t1 t2 -> revert_fold t1; revert_fold t2
+
+(* open FStar.List *)
+
+(* val list_of : tree -> Tot (list int) *)
+(* let list_of = fold (fun n t1 t2 -> t1 @ [n] @ t2) [] *)
+
+val remove_root : t:tree{Node? t} -> Tot tree
+let rec remove_root t =
+  match t with
+  | Node n t1 t2 -> if Leaf? t1 then t2
+                    else Node (Node?.root t1) (remove_root t1) t2
+
+
+val add_root : x:int -> t:tree -> Tot (t':tree{Node? t'}) (decreases t)
+let rec add_root x t =
+  match t with
+  | Leaf -> Node x Leaf Leaf
+  | Node n t1 t2 -> Node x (add_root n t1) t2
+
+(* remove and add implemented this way round-trip; TODO: does the converse hold? *)
+val remove_add_root : x:int -> t:tree ->
+  Lemma (requires True) (ensures (remove_root (add_root x t) = t))
+        (decreases t)
+let rec remove_add_root x t =
+  match t with
+  | Leaf -> ()
+  | Node n t1 t2 -> remove_add_root x t1
+
+let rec count (x:int) (t:tree) : Tot nat =
+  match t with
+  | Leaf -> 0
+  | Node n t1 t2 -> (if n = x then 1 else 0) + count x t1 + count x t2
+
+let rec remove (x:int) (t:tree{count x t > 0}) : Tot tree (decreases t) =
+  match t with
+  | Node n t1 t2 -> if x = n then remove_root t else
+                    if count x t1 > 0 then Node n (remove x t1) t2
+                                      else Node n t1 (remove x t2)
+
+//This proof is flaky with Z3-4.5.0,
+//It seems to require too much fuel to go through, although it should only need 2
+//Z3-4.5.1 nightly successfully solves it with initial_fuel 2
+//NS: 05/08 added a pattern on y to stabilize the proof
+#reset-options "--z3rlimit 20 --initial_fuel 2 --initial_ifuel 2"
+let rec count_remove_root (t:tree{Node? t}) :
+    Lemma (ensures (let r = Node?.root t in
+                   (count r (remove_root t) = count r t - 1) /\
+                   (forall y.{:pattern (count y (remove_root t))} y <> r ==> count y (remove_root t) = count y t))) =
+  let Node n t1 t2 = t in
+  if Leaf? t1 then () 
+  else count_remove_root t1
+
+#reset-options
+let rec count_remove (x:int) (t:tree{count x t > 0}) :
+    Lemma (requires True)
+          (ensures (count x (remove x t) = count x t - 1)) (decreases t) =
+  match t with
+  | Node n t1 t2 -> if x = n then count_remove_root t else
+                    if count x t1 > 0 then count_remove x t1
+                                      else count_remove x t2
+
+
+===================================
+example 3: in f* write a proof for first-order unification
+
+solution:
+
+open FStar.List.Tot
+
+(* First, a missing lemma from the list library *)
+let op_At = append
+val lemma_shift_append: #a:eqtype -> l:list a -> x:a -> m:list a -> Lemma
+  (ensures ( (l@(x::m)) = ((l@[x])@m)))
+let rec lemma_shift_append #a l x m = match l with
+  | [] -> ()
+  | hd::tl -> lemma_shift_append tl x m
+
+(* A term language with variables V and pairs F *)
+type term =
+  | V : i:nat -> term
+  | F : t1:term -> t2:term -> term
+
+(* Finite, ordered sets of variables *)
+val nat_order : OrdSet.cmp nat
+let nat_order :(f:(nat -> nat -> bool){OrdSet.total_order nat f}) = fun x y -> x <= y
+type varset = OrdSet.ordset nat nat_order
+
+val empty_vars : varset
+let empty_vars = OrdSet.empty
+
+(* Collecting the variables in a term *)
+val vars : term -> Tot varset
+let rec vars = function
+  | V i -> OrdSet.singleton i
+  | F t1 t2 -> OrdSet.union (vars t1) (vars t2)
+
+(* Equations among pairs of terms, to be solved *)
+type eqns  = list (term & term)
+
+(* All the variables in a set of equations *)
+val evars : eqns -> Tot varset
+let rec evars = function
+  | [] -> empty_vars
+  | (x, y)::tl -> OrdSet.union (OrdSet.union (vars x) (vars y)) (evars tl)
+
+(* Counting variables; used in the termination metric *)
+val n_evars : eqns -> Tot nat
+let n_evars eqns = OrdSet.size (evars eqns)
+
+(* Counting the number of F-applications; also for the termination metric *)
+val funs : term -> Tot nat
+let rec funs = function
+  | V _ -> 0
+  | F t1 t2 -> 1 + funs t1 + funs t2
+
+val efuns : eqns -> Tot nat
+let rec efuns = function
+  | [] -> 0
+  | (x,y)::tl -> funs x + funs y + efuns tl
+
+(* Counting the number of equations with variables on the the RHS;
+//    also for the termination metric *)
+val n_flex_rhs : eqns -> Tot nat
+let rec n_flex_rhs = function
+  | [] -> 0
+  | (V _, V _)::tl
+  | (_  , V _)::tl -> 1 + n_flex_rhs tl
+  | _::tl -> n_flex_rhs tl
+
+(* A point substitution *)
+type subst = (nat & term)
+
+(* Composition of point substitutions *)
+type lsubst = list subst
+
+val subst_term : subst -> term -> Tot term
+let rec subst_term s t = match t with
+  | V x -> if x = fst s then snd s else V x
+  | F t1 t2 -> F (subst_term s t1) (subst_term s t2)
+
+val lsubst_term : list subst -> term -> Tot term
+let lsubst_term = fold_right subst_term
+
+let occurs x t = OrdSet.mem x (vars t)
+let ok s = not (occurs (fst s) (snd s))
+
+val lsubst_eqns: list subst -> eqns -> Tot eqns
+let rec lsubst_eqns l = function
+  | [] -> []
+  | (x,y)::tl -> (lsubst_term l x, lsubst_term l y)::lsubst_eqns l tl
+
+val lemma_lsubst_eqns_nil: e:eqns -> Lemma
+  (requires True)
+  (ensures (lsubst_eqns [] e = e))
+  [SMTPat (lsubst_eqns [] e)]
+let rec lemma_lsubst_eqns_nil = function
+  | [] -> ()
+  | _::tl -> lemma_lsubst_eqns_nil tl
+
+(* A couple of lemmas about variable counts.
+//    Both of these rely on extensional equality of sets.
+//    So we need to use eq_lemma explicitly *)
+val evars_permute_hd : x:term -> y:term -> tl:eqns -> Lemma
+  (ensures (evars ((x, y)::tl) = evars ((y, x)::tl)))
+let evars_permute_hd x y tl = OrdSet.eq_lemma (evars ((x,y)::tl)) (evars ((y,x)::tl))
+
+val evars_unfun : x:term -> y:term -> x':term -> y':term -> tl:eqns -> Lemma
+  (ensures (evars ((F x y, F x' y')::tl) = evars ((x, x')::(y, y')::tl)))
+let evars_unfun x y x' y' tl = OrdSet.eq_lemma (evars ((F x y, F x' y')::tl)) (evars ((x, x')::(y, y')::tl))
+
+(* Eliminating a variable reduces the variable count *)
+val lemma_vars_decrease: s:subst -> t':term -> Lemma
+  (requires (ok s))
+  (ensures (OrdSet.subset (vars (subst_term s t'))
+ 			  (OrdSet.remove (fst s) (OrdSet.union (vars (snd s)) (vars t')))))
+let rec lemma_vars_decrease s t' = match t' with
+  | V x -> ()
+  | F t1 t2 ->
+    lemma_vars_decrease s t1;
+    lemma_vars_decrease s t2
+
+(* Lifting the prior lemma to equations *)
+val vars_decrease_eqns: x:nat -> t:term -> e:eqns -> Lemma
+  (requires (ok (x, t)))
+  (ensures (OrdSet.subset (evars (lsubst_eqns [x,t] e))
+			  (OrdSet.remove x (evars ((V x, t)::e)))))
+let rec vars_decrease_eqns x t e = match e with
+  | [] -> ()
+  | hd::tl -> lemma_vars_decrease (x,t) (fst hd);
+	    lemma_vars_decrease (x,t) (snd hd);
+	    vars_decrease_eqns x t tl
+ 
+val unify : e:eqns -> list subst -> Tot (option (list subst))
+  (decreases %[n_evars e; efuns e; n_flex_rhs e])
+let rec unify e s = match e with
+  | [] -> Some s
+
+  | (V x, t)::tl ->
+    if V? t && V?.i t = x
+    then unify tl s //t is a flex-rhs
+    else if occurs x t
+    then None
+    else (vars_decrease_eqns x t tl;
+          unify (lsubst_eqns [x,t] tl) ((x,t)::s))
+
+ | (t, V x)::tl -> //flex-rhs
+   evars_permute_hd t (V x) tl;
+   unify ((V x, t)::tl) s
+
+ | (F t1 t2, F t1' t2')::tl -> //efuns reduces
+   evars_unfun t1 t2 t1' t2' tl;
+   unify ((t1, t1')::(t2, t2')::tl) s
+
+(* All equations are solved when each one is just reflexive *)
+val solved : eqns -> Tot bool
+let rec solved = function
+  | [] -> true
+  | (x,y)::tl -> x=y && solved tl
+
+val lsubst_distributes_over_F: l:list subst -> t1:term -> t2:term -> Lemma
+       (requires (True))
+       (ensures (lsubst_term l (F t1 t2) = F (lsubst_term l t1) (lsubst_term l t2)))
+       [SMTPat (lsubst_term l (F t1 t2))]
+let rec lsubst_distributes_over_F l t1 t2 = match l with
+  | [] -> ()
+  | hd::tl -> lsubst_distributes_over_F tl t1 t2
+
+let extend_subst s l = s::l
+let extend_lsubst l l' = l @ l'
+ 
+val lemma_extend_lsubst_distributes_term: l:list subst -> l':list subst -> e:term -> Lemma
+       (requires True)
+       (ensures (lsubst_term (extend_lsubst l l') e = lsubst_term l (lsubst_term l' e)))
+let rec lemma_extend_lsubst_distributes_term l l' e = match l with
+  | [] -> ()
+  | hd::tl -> lemma_extend_lsubst_distributes_term tl l' e
+
+val lemma_extend_lsubst_distributes_eqns: l:list subst -> l':list subst -> e:eqns -> Lemma
+       (requires True)
+       (ensures (lsubst_eqns (extend_lsubst l l') e = lsubst_eqns l (lsubst_eqns l' e)))
+       [SMTPat (lsubst_eqns (extend_lsubst l l') e)]
+let rec lemma_extend_lsubst_distributes_eqns l l' e = match e with
+  | [] -> ()
+  | (t1, t2)::tl ->
+    lemma_extend_lsubst_distributes_term l l' t1;
+    lemma_extend_lsubst_distributes_term l l' t2;
+    lemma_extend_lsubst_distributes_eqns l l' tl
+
+val lemma_subst_id: x:nat -> z:term -> y:term -> Lemma
+  (requires (not (occurs x y)))
+  (ensures (subst_term (x,z) y = y))
+let rec lemma_subst_id x z y = match y with
+  | V x' -> ()
+  | F t1 t2 -> lemma_subst_id x z t1; lemma_subst_id x z t2
+
+let neutral s (x, t)   = subst_term s (V x) = V x  && subst_term s t = t  && ok (x, t)
+let neutral_l l (x, t) = lsubst_term l (V x) = V x && lsubst_term l t = t && ok (x, t)
+
+val lemma_lsubst_term_commutes: s:subst -> l:list subst -> e:term -> Lemma
+  (requires (neutral_l l s))
+  (ensures (lsubst_term [s] (lsubst_term l (subst_term s e)) =
+	    lsubst_term [s] (lsubst_term l e)))
+let rec lemma_lsubst_term_commutes s l e = match e with
+  | V y -> lemma_subst_id (fst s) (snd s) (snd s)
+    
+  | F t1 t2 -> lemma_lsubst_term_commutes s l t1;
+	      lemma_lsubst_term_commutes s l t2
+  
+val lemma_lsubst_eqns_commutes: s:subst -> l:list subst -> e:eqns -> Lemma
+  (requires (neutral_l l s))
+  (ensures (lsubst_eqns [s] (lsubst_eqns l (lsubst_eqns [s] e)) =
+	    lsubst_eqns [s] (lsubst_eqns l e)))
+let rec lemma_lsubst_eqns_commutes s l = function
+  | [] -> ()
+  | (t1,t2)::tl -> lemma_lsubst_term_commutes s l t1;
+		 lemma_lsubst_term_commutes s l t2;
+		 lemma_lsubst_eqns_commutes s l tl
+
+let (++) l1 l2 = extend_lsubst l1 l2
+let sub l e = lsubst_eqns l e
+
+let test l1 l2 l3 = assert (l1 ++ l2 ++ l3 == (l1 ++ l2) ++ l3)
+
+val key_lemma: x:nat -> y:term -> tl:eqns -> l:list subst -> lpre:list subst -> l'':list subst -> Lemma
+  (requires (l'' = lpre ++ ([x,y] ++ l)
+	     /\ not (occurs x y)
+ 	     /\ l `sub` ((V x, y)::tl) = (V x, y)::tl
+ 	     /\ solved (l'' `sub` ([x, y] `sub` tl))))
+  (ensures (solved (l'' `sub` ((V x,y)::tl))))
+
+let key_lemma x y tl l lpre l'' =
+  let xy = [x,y] in
+  let xyl = xy++l in
+  let vxy = V x, y in
+  assert  (l'' `sub` (vxy::tl)
+        == lpre `sub` (xy `sub` (l `sub` (vxy::tl))));
+  lemma_lsubst_eqns_commutes (x,y) l (vxy :: tl);
+  assert  (lpre `sub` (xy `sub` (l `sub` (vxy::tl)))
+        == lpre `sub` (xy `sub` (l `sub` (xy `sub` (vxy::tl)))));
+  assert  (lpre `sub` (xy `sub` (l `sub` (xy `sub` (vxy::tl))))
+        == l'' `sub` (xy `sub` (vxy :: tl)));
+  lemma_subst_id x y y
+
+val lemma_subst_term_idem: s:subst -> t:term -> Lemma
+  (requires (ok s))
+  (ensures (subst_term s (subst_term s t) = subst_term s t))
+let rec lemma_subst_term_idem s t = match t with
+  | V x -> lemma_subst_id (fst s) (snd s) (snd s)
+  | F t1 t2 -> lemma_subst_term_idem s t1; lemma_subst_term_idem s t2
+
+val lemma_subst_eqns_idem: s:subst -> e:eqns -> Lemma
+  (requires (ok s))
+  (ensures (lsubst_eqns [s] (lsubst_eqns [s] e) = lsubst_eqns [s] e))
+let rec lemma_subst_eqns_idem s = function
+  | [] -> ()
+  | (x, y)::tl -> lemma_subst_eqns_idem s tl;
+	        lemma_subst_term_idem s x;
+	        lemma_subst_term_idem s y
+
+val subst_funs_monotone: s:subst -> t:term -> Lemma
+  (ensures (funs (subst_term s t) >= funs t))
+let rec subst_funs_monotone s = function
+  | V x -> ()
+  | F t1 t2 -> subst_funs_monotone s t1; subst_funs_monotone s t2
+  
+val lsubst_funs_monotone: l:list subst -> t:term -> Lemma
+  (ensures (funs (lsubst_term l t) >= funs t))
+let rec lsubst_funs_monotone l t = match l with
+  | [] -> ()
+  | hd::tl ->
+    lsubst_funs_monotone tl t; subst_funs_monotone hd (lsubst_term tl t)
+    
+val lemma_occurs_not_solveable_aux: x:nat -> t:term{occurs x t /\ not (V? t)} -> s:list subst -> Lemma
+  (funs (lsubst_term s t) >= (funs t + funs (lsubst_term s (V x))))
+let rec lemma_occurs_not_solveable_aux x t s = match t with
+  | F t1 t2 ->
+    if occurs x t1
+    then let _ = lsubst_funs_monotone s t2 in
+	 match t1 with
+	   | V y -> ()
+ 	   | _ -> lemma_occurs_not_solveable_aux x t1 s
+    else if occurs x t2
+    then let _ = lsubst_funs_monotone s t1 in
+	 match t2 with
+	   | V y -> ()
+ 	   | _ -> lemma_occurs_not_solveable_aux x t2 s
+    else ()
+
+type not_solveable s =
+  forall l. lsubst_term l (fst s) <> lsubst_term l (snd s)
+
+val lemma_occurs_not_solveable: x:nat -> t:term -> Lemma
+  (requires (occurs x t /\ not (V? t)))
+  (ensures (not_solveable (V x, t)))
+let lemma_occurs_not_solveable x t = FStar.Classical.forall_intro (lemma_occurs_not_solveable_aux x t)
+ 
+val lemma_subst_idem: l:list subst -> x:nat -> t:term -> t':term -> Lemma
+  (requires (lsubst_term l (V x) = lsubst_term l t))
+  (ensures (lsubst_term l (subst_term (x,t) t') = lsubst_term l t'))
+let rec lemma_subst_idem l x t t' = match t' with
+  | V y -> ()
+  | F t1 t2 -> lemma_subst_idem l x t t1; lemma_subst_idem l x t t2
+
+val lemma_subst_eqns: l:list subst -> x:nat -> t:term -> e:eqns -> Lemma
+  (requires (lsubst_term l (V x) = lsubst_term l t))
+  (ensures (lsubst_eqns l (lsubst_eqns [x,t] e) = lsubst_eqns l e))
+let rec lemma_subst_eqns l x t = function
+  | [] -> ()
+  | (t1,t2)::tl ->
+    lemma_subst_idem l x t t1;
+    lemma_subst_idem l x t t2;
+    lemma_subst_eqns l x t tl
+
+type not_solveable_eqns e =
+  forall l. not (solved (lsubst_eqns l e))
+
+val lemma_not_solveable_cons_aux: x:nat -> t:term -> tl:eqns -> l:list subst -> Lemma
+  (requires (not_solveable_eqns (lsubst_eqns [x,t] tl)
+	     /\ solved (lsubst_eqns l ((V x,t)::tl))))
+  (ensures False)
+  [SMTPat (solved (lsubst_eqns l ((V x,t)::tl)))]
+let lemma_not_solveable_cons_aux x t tl l = lemma_subst_eqns l x t tl
+
+val lemma_not_solveable_cons:  x:nat -> t:term -> tl:eqns -> Lemma
+    (requires (not_solveable_eqns (lsubst_eqns [x,t] tl)))
+    (ensures (not_solveable_eqns ((V x, t)::tl)))
+let lemma_not_solveable_cons x t tl = ()
+
+val unify_correct_aux: l:list subst -> e:eqns -> Pure (list subst)
+ (requires (b2t (lsubst_eqns l e = e)))
+ (ensures (fun m ->
+	    match unify e l with
+	      | None -> not_solveable_eqns e
+	      | Some l' ->
+		  l' = (m @ l)
+		 /\ solved (lsubst_eqns l' e)))
+ (decreases %[n_evars e; efuns e; n_flex_rhs e])
+#set-options "--z3rlimit 100"
+let rec unify_correct_aux l = function
+  | [] -> []
+  | hd::tl ->
+    begin match hd with
+      | (V x, y) ->
+	if V? y && V?.i y=x
+	then unify_correct_aux l tl
+	else if occurs x y
+	then (lemma_occurs_not_solveable x y; [])
+	else begin
+	     let s = (x,y) in
+	     let l' = extend_subst s l in
+	     vars_decrease_eqns x y tl;
+	     let tl' = lsubst_eqns [s] tl in
+	     lemma_extend_lsubst_distributes_eqns [s] l tl;
+	     assert (lsubst_eqns l' tl' = lsubst_eqns [s] (lsubst_eqns l (lsubst_eqns [s] tl)));
+	     lemma_lsubst_eqns_commutes s l tl;
+	     lemma_subst_eqns_idem s tl;
+	     let lpre = unify_correct_aux l' tl' in
+	     begin match unify tl' l' with
+	       | None -> lemma_not_solveable_cons x y tl; []
+	       | Some l'' ->
+		 key_lemma x y tl l lpre l'';
+		 lemma_shift_append lpre s l;
+		 lpre@[s]
+	     end
+	 end
+
+      | (y, V x) ->
+	evars_permute_hd y (V x) tl;
+	unify_correct_aux l ((V x, y)::tl)
+
+      | F t1 t2, F s1 s2 ->
+	evars_unfun t1 t2 s1 s2 tl;
+ 	unify_correct_aux l ((t1, s1)::(t2, s2)::tl)
+     end
+
+val unify_eqns : e:eqns -> Tot (option lsubst)
+let unify_eqns e = unify e []
+
+val unify_eqns_correct: e:eqns -> Lemma
+  (requires True)
+  (ensures (if None? (unify_eqns e)
+	    then not_solveable_eqns e
+	    else solved (lsubst_eqns (Some?.v (unify_eqns e)) e)))
+let unify_eqns_correct e =
+  let _ = unify_correct_aux [] e in ()
