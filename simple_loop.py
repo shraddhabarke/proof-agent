@@ -8,6 +8,8 @@ from autogen_agentchat.conditions import ExternalTermination, TextMentionTermina
 from autogen_agentchat.teams import RoundRobinGroupChat
 from autogen_agentchat.ui import Console
 from autogen_core import CancellationToken
+from graphrag_inf import run_graphrag_query
+
 # from graphrag_interface import query_graphrag
 import time
 import json
@@ -141,8 +143,8 @@ def main() -> None:
         #                 {}
         #             </div>
         #             """.format(rag_output), unsafe_allow_html=True)
-        rag_output = ""
-        final_prompt = prompt + "\n\n Here is some relevant context which might be helpful, but incomplete for the task."+ rag_output
+        rag_output = run_graphrag_query("Summarize F* language syntax, guidelines and few-shot examples related to the following query: " + prompt)
+        final_prompt = prompt + "\n\n Here is some relevant context which might be helpful, but incomplete for the task.\n"+ rag_output
         print("Final:", final_prompt)
         # Get or create event loop and run async chat
         loop = get_or_create_eventloop()

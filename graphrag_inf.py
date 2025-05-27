@@ -2,7 +2,7 @@ import subprocess
 
 def run_graphrag_query(query):
     #query = "What is F*?"
-    command = f'graphrag query --root ~/graphrag/ragtest/ --method global --query "{query}"'
+    command = f'graphrag query --root ./rag --method global --query "{query}"'
 
     try:
         result = subprocess.run(
