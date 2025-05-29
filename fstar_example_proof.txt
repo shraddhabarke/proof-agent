@@ -1,0 +1,137 @@
+==============================
+***Example 1:*** Write the implementation and proof of a Red Black tree in F*
+
+:***Proof_expert proof sketch::***
+
+✅ 1. Representation Strategy
+
+Core Idea
+Red-black trees are binary search trees augmented with a coloring and balance discipline that ensures logarithmic height. Our representation must support:
+
+Binary tree structure.
+Node colors.
+Efficient invariant checks.
+Choice
+Define an inductive type rbtree' with:
+
+Empty case: E
+Non-empty case: T carrying color, left subtree, key, right subtree.
+type color = R | B
+
+type rbtree' =
+  | E
+  | T: col:color -> left:rbtree' -> key:nat -> right:rbtree' -> rbtree'
+This captures both structure and essential metadata (colors) for rebalancing.
+
+✅ 2. Specifications to Be Proven
+
+Invariants
+These are the predicates we need to maintain in order for the tree to qualify as a red-black tree:
+
+Root Invariant (r_inv): Root is black.
+Coloring Invariant (c_inv): Red nodes must have black children.
+Black-height Invariant (h_inv): All paths to leaves contain the same number of black nodes.
+Ordering Invariant (k_inv): Binary search tree property.
+Key Specification Goals
+insert must return a tree satisfying all above invariants.
+insert must preserve the set of elements plus the newly inserted one.
+insert must not duplicate elements.
+The implementation must ensure structural correctness without requiring external hints or lemmas in proofs (as achieved).
+✅ 3. Lemmas and Supporting Definitions
+
+To enable modular reasoning and allow automated proofs, define the following:
+
+Utility Functions
+color_of: for safe color retrieval.
+black_height: for checking and comparing black height.
+min_elt / max_elt: used in k_inv.
+in_tree: membership predicate.
+Properties
+Logical predicates (i.e., r_inv, c_inv, h_inv, k_inv) defined as Tot bool.
+These should support composition (e.g., h_inv (T _ a _ b) = h_inv a && h_inv b && black_height a == black_height b).
+Custom Types
+Used to tightly specify inputs to and outputs from balance, e.g.:
+
+not_c_inv: a node is red and has red child.
+lr_c_inv: left/right children of a node maintain c_inv.
+pre_balance, post_balance: behavioral contracts for balance.
+✅ 4. Proof & Implementation Sketch
+
+The plan to build a verified red-black tree follows this sequence:
+
+Step A: Define Basic Structure
+Define the type rbtree' and utility functions (color_of, black_height, etc.). Define and test invariants (r_inv, c_inv, h_inv, k_inv).
+
+Step B: Implement and Specify Balance
+Purpose
+
+Maintain red-black invariants during insertion.
+
+Specification
+
+Precondition (pre_balance):
+Subtrees are BSTs (k_inv) and have equal black height (h_inv).
+In case of red-red violation, it must appear in a specific structure (Okasaki's four cases).
+Postcondition (post_balance):
+Resulting tree satisfies k_inv, c_inv, h_inv, and in_tree properties.
+Black height increases conditionally.
+Implementation
+
+Pattern match to capture Okasaki's cases:
+
+| (B, T R (T R ...) ...)
+| (B, T R ... (T R ...)) ...
+Recolor and rotate accordingly.
+
+Step C: Define and Specify ins
+Purpose
+
+Insert a red node recursively, rebalancing locally as needed.
+
+Specification
+
+Keeps c_inv, k_inv, h_inv for subtree.
+Preserves black_height overall.
+Reestablishes tree shape via balance.
+Implementation
+
+Recursive insertion with calls to balance. Cases:
+
+If key already exists: return tree as-is.
+If key less than current: recurse left.
+If key greater: recurse right.
+Step D: Wrap in insert
+Purpose
+
+Ensure root is black post-insertion.
+
+Specification
+
+Accepts a balanced tree (balanced_rbtree').
+Returns a balanced tree.
+Ensures semantic correctness of in_tree.
+Implementation
+
+Call ins then apply make_black to ensure r_inv.
+
+Step E: Wrap With Smart Constructor
+For better encapsulation:
+
+type balanced_rbtree' = ...
+type rbtree = Mk: tr:rbtree'{balanced_rbtree' tr} -> rbtree
+This ensures users cannot construct unbalanced trees externally.
+
+Optional Final Step: Make Polymorphic
+Generalize key type from nat to ord: 'a -> 'a -> Tot bool.
+
+✅ Summary
+
+Element	Role
+rbtree'	Core representation
+r_inv, c_inv, h_inv, k_inv	Structural and ordering invariants
+black_height, min_elt, max_elt	Reasoning support
+balance	Core rebalancing logic (captures Okasaki cases)
+ins	Recursive insert + local rebalancing
+insert	Wraps insertion, enforces root black
+rbtree	Smart wrapper to expose only valid trees
+This sketch forms a roadmap for constructing and verifying a red-black tree, following both formal and functional design best practices in F*.
