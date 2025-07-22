@@ -10,11 +10,13 @@ from streamlit_elements import elements, editor
 from streamlit_monaco import st_monaco
 from autogen_core.tools import FunctionTool
 from tools.agent_tools import compile_fstar_code
-# from graphrag_interface import query_graphrag
+from graphrag_interface import query_graphrag
 from typing import Sequence
 from autogen_agentchat.messages import BaseAgentEvent, BaseChatMessage
 from autogen_core.memory import ListMemory, MemoryContent, MemoryMimeType
 import asyncio
+from local_model_client import setup_local_client
+import autogen
 
 import os
 from pathlib import Path
@@ -106,8 +108,7 @@ The proof should ultimately show that the function is correct, based on the spec
         {proof_example}
         """
 
-        compile_fstar = FunctionTool(compile_fstar_code, description="Compile F* code")
-
+        compile_fstar = FunctionTool(compile_fstar_code, description="Compile F* code, you must call the F* compiler everytime when you see correct F* code.")
 
         # Initialize vector memory
 
@@ -119,7 +120,8 @@ The proof should ultimately show that the function is correct, based on the spec
                     score_threshold=0.4,  # Minimum similarity score
                 )
         )
-
+        logging_session_id = autogen.runtime_logging.start(config={"dbname": "logs.db"})
+        print("Logging session ID: " + str(logging_session_id))
 
         # Create the three agents with their respective roles and prompts
         self.syntax_agent = AssistantAgent(
@@ -158,7 +160,7 @@ The proof should ultimately show that the function is correct, based on the spec
         the general plan is:
         1. The proof_agent will generate a proof sketch, starting from 1) selecting the correct representation, 2) reasonong about the specifications (pre, post conditions, refinements). 3) identifying what relevant lemmas you might use in the proof sketch.
         2. The syntax_agent will take the proof sketch and turn it into a real syntactically correct program.
-        3. The syntax_agent will then fix the code if there are compiler errors or ask the proof agent for help on verification errors, OR THE RAG AGENT FOR HELP ON SYNTAX ERRORS.
+        3. The syntax_agent will then fix the code if there are compiler errors or ask the proof agent for help on verification errors.
         4. The process continues until the code verifies and all verification conditions are discharged successfully.
         5. The syntax_agent will then print the final code and explain it.
 
@@ -175,7 +177,7 @@ The proof should ultimately show that the function is correct, based on the spec
         # Create the agent team
         text_termination = TextMentionTermination("All verification conditions discharged successfully") # TODO: change termination message
         self.team = SelectorGroupChat(
-            participants=[self.syntax_agent, self.proof_agent, self.rag_agent],
+            participants=[self.syntax_agent, self.proof_agent], #todo: removed rag agent
             termination_condition=text_termination,
             selector_prompt=selector_prompt,
             allow_repeated_speaker=True,
@@ -198,6 +200,4 @@ The proof should ultimately show that the function is correct, based on the spec
         """Get the agent team for team-based chat"""
         return self.team
 
-
-
-
+    autogen.runtime_logging.stop()

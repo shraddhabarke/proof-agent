@@ -2,7 +2,7 @@ import subprocess
 
 def run_graphrag_query(query):
     #query = "What is F*?"
-    command = f'graphrag query --root ./rag --method global --query "{query}"'
+    command = f'graphrag query --root ./rag --method local --query "{query}"'
 
     try:
         result = subprocess.run(
@@ -21,6 +21,3 @@ def run_graphrag_query(query):
         print("ERROR executing graphrag query:")
         print(e.stderr)
         return None
-
-if __name__ == "__main__":
-    run_graphrag_query("What is F*?")

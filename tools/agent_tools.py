@@ -7,11 +7,12 @@ import streamlit as st
 
 def compile_fstar_code(code_str:str) -> str:
     """
-    Compiles a given F* code string using fstar.exe.
+    Compiles a given F* code string using fstar.exe. The agent must call this tool every time there is syntactically valid F* code
     :param code_str: The F* code as a string.
     :return: The output from the fstar.exe compilation process.
     """
     # test for now, since the module name must match the file na
+    print("Inside Compile FStar Code")
     file_name = f"Test.fst"
     directory = "temp_files"
     #in root directory
@@ -20,7 +21,18 @@ def compile_fstar_code(code_str:str) -> str:
     # Write the code to a .fst file
     file_path = os.path.join(directory, file_name)
     with open(file_path, 'w') as f:
+        print("Code to be compiled", code_str, file_path)
         f.write(code_str)
+
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    file_name = f"Test_{timestamp}.fst"
+    file_path_new = os.path.join(directory, file_name)
+    # Write the code to the file
+    with open(file_path_new, 'w') as f:
+        print("Saving code to:", file_path_new)
+        f.write(code_str)
+
 
     # Get the path to fstar.exe from the environment variable
     fstar_path = os.getenv('FSTAR_PATH')
@@ -29,7 +41,8 @@ def compile_fstar_code(code_str:str) -> str:
 
     # Compile the .fst file using fstar.exe
     try:
-        result = subprocess.run([fstar_path, file_path], capture_output=True, text=True, check=True)    
+        result = subprocess.run([fstar_path, file_path], capture_output=True, text=True, check=True)
+        print(result)
         return result.stdout
     except subprocess.CalledProcessError as e:
         return f"An error occurred: {e.stderr}"

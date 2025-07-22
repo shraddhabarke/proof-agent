@@ -9,13 +9,21 @@ from autogen_agentchat.teams import RoundRobinGroupChat
 from autogen_agentchat.ui import Console
 from autogen_core import CancellationToken
 from graphrag_inf import run_graphrag_query
-
+from tools import agent_tools
 # from graphrag_interface import query_graphrag
 import time
 import json
 import ast
 import re
 import os
+
+import sys
+
+# Check if there's a file path passed as an argument
+initial_prompt = None
+if len(sys.argv) > 1:
+    with open(sys.argv[1], "r") as f:
+        initial_prompt = f.read().strip()
 
 async def async_chat(team: RoundRobinGroupChat, prompt: str, file_content: str = None) -> str:
     """Async function to handle chat interactions with the agent team"""
@@ -27,7 +35,15 @@ async def async_chat(team: RoundRobinGroupChat, prompt: str, file_content: str =
         actual_prompt = f"File content:\n{file_content}\n\nUser message:\n{prompt}" if file_content else prompt
         
         first_message = True  # Add flag to track first message
+        max_attempts = 50
+        attempt_count = 0
+
         async for message in team.run_stream(task=actual_prompt):
+            if attempt_count >= max_attempts:
+                st.warning(f"Reached {max_attempts} attempts without verifying. Moving on.")
+                sys.exit(0)
+                st.stop()
+                break
             if isinstance(message, TaskResult):
                 stop_reason = message.stop_reason
                 break
@@ -36,7 +52,13 @@ async def async_chat(team: RoundRobinGroupChat, prompt: str, file_content: str =
                 if first_message:
                     first_message = False
                     continue
-                    
+
+                if attempt_count >= max_attempts:
+                    st.warning(f"Reached {max_attempts} attempts without verifying. Moving on.")
+                    sys.exit(0) 
+                    st.stop()
+                #break
+
                 # Store messages with agent information
                 agent_name = message.agent.name if hasattr(message, 'agent') else "Assistant"
                 response_messages.append(f"**{agent_name}**: {str(message.content)}")
@@ -44,18 +66,75 @@ async def async_chat(team: RoundRobinGroupChat, prompt: str, file_content: str =
                 
                 # Original message handling
                 if "FunctionCall" in str(message.content):
-
-                #   with open("./temp_files/Test.fst", "r") as f:
-                #     f.seek(0)
-                #     code = f.read()
-                #     st.code(code, language="C")
-                #     # Keep the original warning for debugging
+                    attempt_count += 1
+                    print("attempt-count:", attempt_count)
+                    code_match = code_match = re.search(r"```(?:fstar)?\s*\n(.*?)```", str(message.content), re.DOTALL) #re.search(r"```fstar\n(.*?)```", str(message.content), re.DOTALL)
+                    fstar_json_entry = {
+                            "prompt": prompt,
+                            "fstar_code": code_match.group(1) if code_match else str(message.content),
+                            "code-match": code_match
+                            }
+                    print("fstar_json_entry:", fstar_json_entry)
+                    if os.path.exists(json_file):
+                        with open(json_file, "r") as f:
+                            try:
+                                existing_data = json.load(f)
+                                if not isinstance(existing_data, list):
+                                    existing_data = []
+                            except json.JSONDecodeError:
+                                existing_data = []
+                    else:
+                        existing_data = []
+                    existing_data.append(fstar_json_entry)
+                    with open(json_file, "w") as f:
+                        json.dump(existing_data, f, indent=4)
+                    if code_match:
+                        fstar_code = code_match.group(1)
+                        st.info("Compiling new F* code...")
+                        st.code(fstar_code, language="fstar")
+                        st.info(fstar_code)
+                        st.write(fstar_code)
+                        compile_output = agent_tools.compile_fstar_code(fstar_code)
+                        st.write(compile_output)
+                        st.success("✅ Compilation done!")
+                        with open("./temp_files/Test.fst", "w") as f:
+                            f.write(fstar_code)
+                        st.write(f"**Compilation output:**\n```\n{compile_output}\n```")
                     st.warning("Calling compile_fstar_code....")
                 elif "FunctionExecutionResult" in str(message.content):
+                    print("Inside FunctionExecutionResult")
+                    print(message.content)
                     pass
                     #st.warning(str(message.content))
-                elif "Verified module" in str(message.content):
+                elif "All verification conditions discharged successfully" in str(message.content):
+                    with open("./temp_files/Test.fst", "r") as f:
+                        fstar_code_to_save = f.read()
+
+                    if fstar_code_to_save:
+                        fstar_json_entry = {
+                            "prompt": prompt,
+                            "fstar_code": fstar_code_to_save,
+                        }
+                        json_file = "verified_fstar_snippets.json"
+                        if os.path.exists(json_file):
+                            with open(json_file, "r") as f:
+                                existing_data = json.load(f)
+                        else:
+                            existing_data = []
+
+                        existing_data.append(fstar_json_entry)
+                        with open(json_file, "w") as f:
+                            json.dump(existing_data, f, indent=4)
+
+                        open("./temp_files/Test.fst", "w").close()
+
+                        st.success(f"✅ Verified F* code saved to {json_file}!")
+                        fstar_code_to_save = None
+
                     st.success("Verified module: Test. All verification conditions discharged successfully.")
+                    st.info(fstar_code_to_save)
+                    st.info(attempt_count)
+
                     # Add a small delay to ensure file is written
                     time.sleep(0.1)  # 100ms delay
                     
@@ -67,6 +146,7 @@ async def async_chat(team: RoundRobinGroupChat, prompt: str, file_content: str =
                         # f.seek(0)
                         # code = f.read()
                         # st.code(code, language="C")
+                    st.stop()
                 elif "error occurred" in str(message.content):
                     st.error(str(message.content))
                 else:
@@ -116,8 +196,13 @@ def main() -> None:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    prompt = st.chat_input("Type a message...")
-
+    # Replace st.chat_input line:
+    if initial_prompt:
+        prompt = initial_prompt
+        st.session_state["messages"].append({"role": "user", "content": prompt})
+        st.chat_input("Type a message...")  # Dummy to keep UI alive
+    else:
+        prompt = st.chat_input("Type a message...")
 
     if prompt:
         st.session_state["messages"].append({"role": "user", "content": prompt})
@@ -143,9 +228,11 @@ def main() -> None:
         #                 {}
         #             </div>
         #             """.format(rag_output), unsafe_allow_html=True)
-        rag_output = run_graphrag_query("Summarize F* language syntax, guidelines and few-shot examples related to the following query: " + prompt)
+        from graphrag_inf import run_graphrag_query
+
+        rag_output = run_graphrag_query("Summarize F* language syntax and few-shot examples only related to the following query, do not talk generally about F*:" + prompt)
+        #print(rag_output)
         final_prompt = prompt + "\n\n Here is some relevant context which might be helpful, but incomplete for the task.\n"+ rag_output
-        print("Final:", final_prompt)
         # Get or create event loop and run async chat
         loop = get_or_create_eventloop()
         
